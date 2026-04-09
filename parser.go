@@ -19,8 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thanhminhmr/go-common/log"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
@@ -57,7 +55,7 @@ func serverRequestHandler(
 	}
 	logger.Trace().Any("request", parsed).Msg("Request parsed")
 	if renderer := handler(); renderer != nil {
-		log.FuncOrAny(logger.Trace(), "response", renderer).Msg("Response returned")
+		logger.Trace().Any("response", funcOrAny(renderer)).Msg("Response returned")
 		if err := renderer.Render(writer); err != nil {
 			logger.Error().Err(err).Msg("Failed to render response")
 		}

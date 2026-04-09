@@ -14,12 +14,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/thanhminhmr/go-common/configuration"
-	"github.com/thanhminhmr/go-common/log"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
+	"github.com/thanhminhmr/go-common/configuration"
 	"github.com/thanhminhmr/go-exception"
 	"go.uber.org/fx"
 )
@@ -36,11 +34,20 @@ func init() {
 	configuration.SetDefault("HTTP_SERVER_READ_HEADER_TIMEOUT", "5")
 	configuration.SetDefault("HTTP_SERVER_IDLE_TIMEOUT", "60")
 	configuration.SetDefault("HTTP_SERVER_MAX_HEADER_BYTES", "4096")
+	configuration.SetDefault("HTTP_SERVER_SHUTDOWN_ON_ERROR", "true")
+}
+
+func ifValue[Type any](condition bool, ifTrue, ifFalse Type) Type {
+	if condition {
+		return ifTrue
+	}
+	return ifFalse
 }
 
 func NewServer(
 	ctx context.Context,
 	lifecycle fx.Lifecycle,
+	shutdown fx.Shutdowner,
 	config *ServerConfig,
 ) chi.Router {
 	// create route
@@ -56,6 +63,7 @@ func NewServer(
 			IdleTimeout:       time.Duration(config.IdleTimeout) * time.Second,
 			MaxHeaderBytes:    int(config.MaxHeaderBytes),
 		},
+		shutdown: ifValue(config.ShutdownOnError, shutdown, nil),
 	}
 	// set a sane default middleware stack
 	router.Use(
@@ -71,9 +79,10 @@ func NewServer(
 }
 
 type httpServer struct {
-	logger *zerolog.Logger
-	router *chi.Mux
-	server http.Server
+	logger   *zerolog.Logger
+	router   *chi.Mux
+	server   http.Server
+	shutdown fx.Shutdowner
 }
 
 func (s *httpServer) onStart(context.Context) error {
@@ -92,7 +101,12 @@ func (s *httpServer) onStart(context.Context) error {
 func (s *httpServer) serve() {
 	s.logger.Info().Str("addr", s.server.Addr).Msgf("Start serving")
 	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		s.logger.Error().Err(err).Msg("Shutdown with error")
+		s.logger.Error().Err(err).Msg("Server closed with error")
+		if s.shutdown != nil {
+			if err := s.shutdown.Shutdown(); err != nil {
+				s.logger.Error().Err(err).Msg("Error shutting down")
+			}
+		}
 	}
 }
 
@@ -113,8 +127,8 @@ func (s *httpServer) dumpRoutes(
 	middlewares ...func(http.Handler) http.Handler,
 ) error {
 	s.logger.Info().
-		Object("handler", log.Func(handler)).
-		Array("middlewares", log.Funcs(middlewares)).
+		Object("handler", funcObject(handler)).
+		Array("middlewares", funcObjects(middlewares)).
 		Msgf("Route: %s %s", method, route)
 	return nil
 }
