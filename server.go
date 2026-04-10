@@ -17,24 +17,16 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
-	"github.com/thanhminhmr/go-common/configuration"
 	"github.com/thanhminhmr/go-exception"
 	"go.uber.org/fx"
 )
 
 type ServerConfig struct {
 	Port              uint16 `env:"HTTP_SERVER_PORT" validate:"required"`
-	ReadHeaderTimeout uint32 `env:"HTTP_SERVER_READ_HEADER_TIMEOUT" validate:"min=0,max=60"`
-	IdleTimeout       uint32 `env:"HTTP_SERVER_IDLE_TIMEOUT" validate:"min=0,max=3600"`
-	MaxHeaderBytes    uint32 `env:"HTTP_SERVER_MAX_HEADER_BYTES" validate:"min=0,max=65536"`
-	ShutdownOnError   bool   `env:"HTTP_SERVER_SHUTDOWN_ON_ERROR"`
-}
-
-func init() {
-	configuration.SetDefault("HTTP_SERVER_READ_HEADER_TIMEOUT", "5")
-	configuration.SetDefault("HTTP_SERVER_IDLE_TIMEOUT", "60")
-	configuration.SetDefault("HTTP_SERVER_MAX_HEADER_BYTES", "4096")
-	configuration.SetDefault("HTTP_SERVER_SHUTDOWN_ON_ERROR", "true")
+	ReadHeaderTimeout uint32 `env:"HTTP_SERVER_READ_HEADER_TIMEOUT" validate:"min=0,max=60" default:"5"`
+	IdleTimeout       uint32 `env:"HTTP_SERVER_IDLE_TIMEOUT" validate:"min=0,max=3600" default:"60"`
+	MaxHeaderBytes    uint32 `env:"HTTP_SERVER_MAX_HEADER_BYTES" validate:"min=0,max=65536" default:"4096"`
+	ShutdownOnError   bool   `env:"HTTP_SERVER_SHUTDOWN_ON_ERROR" default:"true"`
 }
 
 func ifValue[Type any](condition bool, ifTrue, ifFalse Type) Type {
@@ -45,16 +37,16 @@ func ifValue[Type any](condition bool, ifTrue, ifFalse Type) Type {
 }
 
 func NewServer(
-	ctx context.Context,
 	lifecycle fx.Lifecycle,
 	shutdown fx.Shutdowner,
+	logger *zerolog.Logger,
 	config *ServerConfig,
 ) chi.Router {
 	// create route
 	router := chi.NewRouter()
 	// create the http server
 	server := httpServer{
-		logger: zerolog.Ctx(ctx),
+		logger: logger,
 		router: router,
 		server: http.Server{
 			Addr:              fmt.Sprintf(":%d", config.Port),
