@@ -28,6 +28,37 @@ import (
 
 type ServerRequestHandler[ServerRequest any] func(ctx context.Context, request *ServerRequest) ServerResponse
 
+// ServerRequestParser parses an HTTP request and populates a struct using field
+// tags to map request data to struct fields.
+//
+// Tags are applied in the order listed below, from lowest to highest priority.
+// If multiple tags are present on the same field and more than one value is
+// available in the request, the value from the higher-priority tag is used
+// (e.g., `form` overrides `query`).
+//
+// Supported tags:
+//
+//   - `header`: The tag value must match the normalized HTTP header name.
+//
+//   - `cookie`: The tag value must match the cookie name.
+//
+//   - `query`: The tag value must match the query parameter name.
+//
+//   - `url`: The tag value must match a named segment in the URL path.
+//
+//   - `form`: The tag value must match the form parameter name.
+//
+//   - `json`: The tag value must be empty. Only one field with this tag
+//     is allowed per struct. The request body is unmarshalled into this field using
+//     `encoding/json`. Any type validation is handled by the JSON unmarshalling
+//     process.
+//
+//   - `multipart`: The tag value must be empty. Only one field with this tag
+//     is allowed per struct. The field must be of type [multipart.Reader].
+//
+//   - `body`: The tag value must be a semicolon-separated list of accepted
+//     Content-Types. Only one field with this tag is allowed per struct.
+//     The field must be of type [io.ReadCloser].
 func ServerRequestParser[ServerRequest any](handler ServerRequestHandler[ServerRequest]) http.HandlerFunc {
 	tags := checkServerRequestConfiguration[ServerRequest]()
 	return func(writer http.ResponseWriter, request *http.Request) {
@@ -142,7 +173,7 @@ func checkServerRequestConfiguration[ServerRequest any]() serverRequestConfigura
 			tags.flags = tags.flags | tagMultipart
 			tags.multipartFieldIndex = index
 		}
-		if contentTypes, exists := field.Tag.Lookup("body"); exists {
+		if value, exists := field.Tag.Lookup("body"); exists {
 			if tags.flags&tagBody != 0 {
 				panic("BUG: multiple body-tagged fields are not allowed")
 			}
@@ -151,7 +182,7 @@ func checkServerRequestConfiguration[ServerRequest any]() serverRequestConfigura
 			}
 			tags.flags = tags.flags | tagBody
 			tags.bodyFieldIndex = index
-			tags.bodyContentTypes = strings.Split(contentTypes, ";")
+			tags.bodyContentTypes = strings.Split(value, ";")
 		}
 	}
 	return tags
