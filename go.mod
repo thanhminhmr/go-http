@@ -10,6 +10,7 @@ require (
 	github.com/thanhminhmr/go-common v0.0.29
 	github.com/thanhminhmr/go-exception v0.0.8
 	go.uber.org/fx v1.24.0
+	golang.org/x/net v0.52.0
 )
 
 require (
