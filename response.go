@@ -55,3 +55,17 @@ func (r ServerJsonResponse) Render(writer http.ResponseWriter) error {
 	writer.WriteHeader(r.Status)
 	return json.NewEncoder(writer).Encode(r.Response)
 }
+
+type CookieServerResponse struct {
+	Inner   ServerResponse
+	Cookies []http.Cookie
+}
+
+func (c CookieServerResponse) Render(writer http.ResponseWriter) error {
+	for _, cookie := range c.Cookies {
+		if cookieString := cookie.String(); cookieString != "" {
+			writer.Header().Add("Set-Cookie", cookieString)
+		}
+	}
+	return c.Inner.Render(writer)
+}
