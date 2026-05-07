@@ -7,13 +7,10 @@ require (
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/rs/zerolog v1.35.1
-	github.com/thanhminhmr/go-common v0.0.38
 	github.com/thanhminhmr/go-exception v0.0.8
 	go.uber.org/fx v1.24.0
 	golang.org/x/net v0.53.0
 )
-
-replace gopkg.in/yaml.v3 v3.0.1 => go.yaml.in/yaml/v3 v3.0.4
 
 require (
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
