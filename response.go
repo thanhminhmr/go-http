@@ -24,7 +24,7 @@ func (fn ServerResponseFunc) Render(writer http.ResponseWriter) error {
 }
 
 type ServerErrorResponse struct {
-	Status int
+	Status Status
 	Cause  error
 }
 
@@ -32,7 +32,7 @@ func (e ServerErrorResponse) Render(writer http.ResponseWriter) error {
 	header := writer.Header()
 	header.Add("Content-Type", "text/plain; charset=utf-8")
 	header.Add("X-Content-Type-Options", "nosniff")
-	writer.WriteHeader(e.Status)
+	writer.WriteHeader(int(e.Status))
 	_, err := writer.Write([]byte(e.Cause.Error()))
 	return err
 }
@@ -42,7 +42,7 @@ func (e ServerErrorResponse) Error() string {
 }
 
 func (e ServerErrorResponse) MarshalZerologObject(event *zerolog.Event) {
-	event.AnErr("cause", e.Cause).Int("Status", e.Status)
+	event.AnErr("cause", e.Cause).Int("Status", int(e.Status))
 }
 
 type ServerJsonResponse struct {
