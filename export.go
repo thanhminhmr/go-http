@@ -11,6 +11,7 @@ import "net/http"
 type Cookie = http.Cookie
 type Handler = http.Handler
 type HandlerFunc = http.HandlerFunc
+type Middleware = func(http.Handler) http.Handler
 type Header = http.Header
 type Request = http.Request
 type ResponseWriter = http.ResponseWriter

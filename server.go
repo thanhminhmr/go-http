@@ -8,152 +8,111 @@ package http
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
-	"fmt"
-	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/rs/zerolog"
+	"github.com/thanhminhmr/go-common/ctrl"
+	"github.com/thanhminhmr/go-common/log"
 	"github.com/thanhminhmr/go-exception"
-	"go.uber.org/fx"
 )
 
 type ServerConfig struct {
 	Port              uint16 `env:"HTTP_SERVER_PORT" validate:"required"`
-	ReadHeaderTimeout uint32 `env:"HTTP_SERVER_READ_HEADER_TIMEOUT" validate:"min=0,max=60" default:"5"`
-	IdleTimeout       uint32 `env:"HTTP_SERVER_IDLE_TIMEOUT" validate:"min=0,max=3600" default:"60"`
-	MaxHeaderBytes    uint32 `env:"HTTP_SERVER_MAX_HEADER_BYTES" validate:"min=0,max=65536" default:"4096"`
+	ReadHeaderTimeout int    `env:"HTTP_SERVER_READ_HEADER_TIMEOUT" validate:"min=0,max=60" default:"5"`
+	IdleTimeout       int    `env:"HTTP_SERVER_IDLE_TIMEOUT" validate:"min=0,max=3600" default:"60"`
+	MaxHeaderBytes    int    `env:"HTTP_SERVER_MAX_HEADER_BYTES" validate:"min=0,max=65536" default:"4096"`
 	ShutdownOnError   bool   `env:"HTTP_SERVER_SHUTDOWN_ON_ERROR" default:"true"`
 }
 
-func ifValue[Type any](condition bool, ifTrue, ifFalse Type) Type {
-	if condition {
-		return ifTrue
-	}
-	return ifFalse
-}
-
-func NewServer(
-	lifecycle fx.Lifecycle,
-	shutdown fx.Shutdowner,
-	logger *zerolog.Logger,
-	config *ServerConfig,
-) chi.Router {
+func NewServer(config *ServerConfig) (*chi.Mux, ctrl.Starter) {
 	// create route
 	router := chi.NewRouter()
-	// create the http server
-	server := httpServer{
-		logger: logger,
-		router: router,
-		server: http.Server{
-			Addr:              fmt.Sprintf(":%d", config.Port),
-			Handler:           router,
-			ReadHeaderTimeout: time.Duration(config.ReadHeaderTimeout) * time.Second,
-			IdleTimeout:       time.Duration(config.IdleTimeout) * time.Second,
-			MaxHeaderBytes:    int(config.MaxHeaderBytes),
-		},
-		shutdown: ifValue(config.ShutdownOnError, shutdown, nil),
+	// return the router and the starter func
+	return router, func(ctx context.Context) (ctrl.Runner, ctrl.Cleaner) {
+		// create the http server
+		server := httpServer{
+			config: config,
+			router: router,
+			server: http.Server{
+				Addr:              string(strconv.AppendUint([]byte{':'}, uint64(config.Port), 10)),
+				Handler:           router,
+				ReadHeaderTimeout: time.Duration(config.ReadHeaderTimeout) * time.Second,
+				IdleTimeout:       time.Duration(config.IdleTimeout) * time.Second,
+				MaxHeaderBytes:    config.MaxHeaderBytes,
+			},
+		}
+		// set a sane default middleware stack
+		router.Use(requestLogger)
+		// return the runner and the cleaner
+		return server.runner, server.cleaner
 	}
-	// set a sane default middleware stack
-	router.Use(
-		server.log,
-		middleware.StripSlashes,
-	)
-	// add to lifecycle
-	lifecycle.Append(fx.Hook{
-		OnStart: server.onStart,
-		OnStop:  server.onStop,
-	})
-	return router
 }
 
 type httpServer struct {
-	logger   *zerolog.Logger
-	router   *chi.Mux
-	server   http.Server
-	shutdown fx.Shutdowner
+	config *ServerConfig
+	router *chi.Mux
+	server http.Server
 }
 
-func (s *httpServer) onStart(context.Context) error {
+func (s *httpServer) runner(ctx context.Context, shutdown context.CancelFunc) {
+	logger := log.Logger(ctx)
 	// dump all routes
-	s.logger.Info().Msg("Listing all routes...")
-	if err := chi.Walk(s.router, s.dumpRoutes); err != nil {
-		s.logger.Error().Err(err).Msg("Error walking routes")
-		return err
+	logger.Info().Msg("Listing all routes...")
+	if err := chi.Walk(s.router, func(method string, route string, handler Handler, middlewares ...Middleware) error {
+		logger.Info().With(
+			"method", method, "route", route, "handler", funcObject(handler), "middlewares", funcObjects(middlewares),
+		).Msg("Route")
+		return nil
+	}); err != nil {
+		logger.Error().With("error", err).Msg("Error walking routes")
+		exception.Panic(err)
 	}
-	s.logger.Info().Msg("Listed all routes")
+	logger.Info().Msg("Listed all routes")
 	// start the server
-	go s.serve()
-	return nil
-}
-
-func (s *httpServer) serve() {
-	s.logger.Info().Str("addr", s.server.Addr).Msgf("Start serving")
+	logger.Info().With("address", s.server.Addr).Msg("Start serving")
 	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		s.logger.Error().Err(err).Msg("Server closed with error")
-		if s.shutdown != nil {
-			if err := s.shutdown.Shutdown(); err != nil {
-				s.logger.Error().Err(err).Msg("Error shutting down")
-			}
+		logger.Error().With("error", err).Msg("Server closed with error")
+		if s.config.ShutdownOnError {
+			shutdown()
 		}
 	}
 }
 
-func (s *httpServer) onStop(ctx context.Context) error {
-	s.logger.Info().Msg("Shutting down...")
+func (s *httpServer) cleaner(ctx context.Context) {
+	log.Logger(ctx).Info().Msg("Shutting down...")
 	if err := s.server.Shutdown(ctx); err != nil {
-		s.logger.Error().Err(err).Msg("Shutdown with error")
-		return err
+		log.Logger(ctx).Error().With("error", err).Msg("Error while shutting down")
 	}
-	s.logger.Info().Msg("Shutdown complete")
-	return nil
+	log.Logger(ctx).Info().Msg("Shutdown complete")
 }
 
-func (s *httpServer) dumpRoutes(
-	method string,
-	route string,
-	handler http.Handler,
-	middlewares ...func(http.Handler) http.Handler,
-) error {
-	s.logger.Info().
-		Object("handler", funcObject(handler)).
-		Array("middlewares", funcObjects(middlewares)).
-		Msgf("Route: %s %s", method, route)
-	return nil
-}
-
-func (s *httpServer) log(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		logger := s.logger.With().Str("request_id", fmt.Sprintf("%016x", rand.Uint64())).Logger()
+func requestLogger(next Handler) Handler {
+	return HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		logger := log.Logger(request.Context()).With("request_id", rand.Text())
 		// log request and response
-		logger.Info().
-			Str("method", request.Method).
-			Stringer("url", request.URL).
-			Msg("Request")
+		logger.Info().With("method", request.Method, "url", request.URL.String()).Msg("Request")
 		start := time.Now()
 		wrappedWriter := middleware.NewWrapResponseWriter(writer, request.ProtoMajor)
 		defer func(start time.Time, wrappedWriter middleware.WrapResponseWriter) {
 			duration := time.Since(start)
 			logger.Info().
-				Int("status", wrappedWriter.Status()).
-				Int("bytes", wrappedWriter.BytesWritten()).
-				Dur("duration", duration).
+				With("status", wrappedWriter.Status(), "bytes", wrappedWriter.BytesWritten(), "duration", duration.String()).
 				Msg("Response")
 		}(start, wrappedWriter)
 		// recover any panic
-		defer func() {
-			if recovered := exception.Recover(recover()); recovered != nil {
-				logger.Error().Err(recovered).Msg("Recovered from panic")
-				// response with 500 Internal Server Error
-				if request.Header.Get("Connection") != "Upgrade" {
-					wrappedWriter.WriteHeader(http.StatusInternalServerError)
-				}
+		defer exception.Recover(func(recovered exception.Exception) {
+			logger.Error().With("recovered", recovered).Msg("Recovered from panic")
+			// response with 500 Internal Server Error
+			if request.Header.Get("Connection") != "Upgrade" {
+				wrappedWriter.WriteHeader(http.StatusInternalServerError)
 			}
-		}()
+		})
 		// call the next handler
-		next.ServeHTTP(wrappedWriter, request.WithContext(logger.WithContext(request.Context())))
+		next.ServeHTTP(wrappedWriter, request.WithContext(logger))
 	})
 }

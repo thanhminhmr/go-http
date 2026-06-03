@@ -10,11 +10,10 @@ import (
 	"reflect"
 	"runtime"
 
-	"github.com/rs/zerolog"
 	"github.com/thanhminhmr/go-exception"
 )
 
-func toStackFrame(v any) exception.StackFrame {
+func funcObject(v any) exception.StackFrame {
 	if v == nil {
 		return exception.StackFrame{
 			Function: "<nil>",
@@ -53,21 +52,17 @@ func toStackFrame(v any) exception.StackFrame {
 
 func funcOrAny(v any) any {
 	if v != nil {
-		if m := toStackFrame(v); m.Function != "<invalid>" {
+		if m := funcObject(v); m.Function != "<invalid>" {
 			return m
 		}
 	}
 	return v
 }
 
-func funcObject(v any) zerolog.LogObjectMarshaler {
-	return toStackFrame(v)
-}
-
-func funcObjects[S ~[]E, E any](values S) zerolog.LogArrayMarshaler {
+func funcObjects[S ~[]E, E any](values S) any {
 	frames := make(exception.StackFrames, 0, len(values))
 	for _, value := range values {
-		frames = append(frames, toStackFrame(value))
+		frames = append(frames, funcObject(value))
 	}
 	return frames
 }

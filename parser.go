@@ -22,12 +22,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/rs/zerolog"
+	"github.com/thanhminhmr/go-common/log"
 	"github.com/thanhminhmr/go-exception"
 	"golang.org/x/net/html/charset"
 )
 
-type ServerRequestHandler[ServerRequest any] func(ctx context.Context, request *ServerRequest) ServerResponse
+type ServerRequestHandler[ServerRequest any] = func(ctx context.Context, request *ServerRequest) ServerResponse
 
 // ServerRequestParser parses an HTTP request and populates a struct using field
 // tags to map request data to struct fields.
@@ -90,22 +90,22 @@ func serverRequestHandler(
 	tags serverRequestTags,
 	handler func() ServerResponse,
 ) {
-	logger := zerolog.Ctx(request.Context())
+	logger := log.Logger(request.Context())
 	if errorResponse := tags.parse(request, parsed); errorResponse != nil {
-		logger.Error().Err(errorResponse).Msg("Failed to parse request")
+		logger.Error().With("error", errorResponse).Msg("Failed to parse request")
 		if err := errorResponse.Render(writer); err != nil {
-			logger.Error().Err(err).Msg("Failed to render error")
+			logger.Error().With("error", err).Msg("Failed to render error")
 		}
 		return
 	}
-	logger.Trace().Any("request", parsed).Msg("Request parsed")
+	logger.Debug().With("request", parsed).Msg("Request parsed")
 	if renderer := handler(); renderer != nil {
-		logger.Trace().Any("response", funcOrAny(renderer)).Msg("Response returned")
+		logger.Debug().With("response", funcOrAny(renderer)).Msg("Response returned")
 		if err := renderer.Render(writer); err != nil {
-			logger.Error().Err(err).Msg("Failed to render response")
+			logger.Error().With("error", err).Msg("Failed to render response")
 		}
 	} else {
-		logger.Trace().Msg("Empty response returned")
+		logger.Debug().Msg("Empty response returned")
 		writer.WriteHeader(http.StatusNoContent)
 	}
 }

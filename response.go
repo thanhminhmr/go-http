@@ -9,8 +9,6 @@ package http
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/rs/zerolog"
 )
 
 type ServerResponse interface {
@@ -35,14 +33,6 @@ func (e ServerErrorResponse) Render(writer http.ResponseWriter) error {
 	writer.WriteHeader(int(e.Status))
 	_, err := writer.Write([]byte(e.Cause.Error()))
 	return err
-}
-
-func (e ServerErrorResponse) Error() string {
-	return e.Cause.Error()
-}
-
-func (e ServerErrorResponse) MarshalZerologObject(event *zerolog.Event) {
-	event.AnErr("cause", e.Cause).Int("Status", int(e.Status))
 }
 
 type ServerJsonResponse struct {
