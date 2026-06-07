@@ -50,16 +50,7 @@ func funcObject(v any) exception.StackFrame {
 	}
 }
 
-func funcOrAny(v any) any {
-	if v != nil {
-		if m := funcObject(v); m.Function != "<invalid>" {
-			return m
-		}
-	}
-	return v
-}
-
-func funcObjects[S ~[]E, E any](values S) any {
+func funcObjects[S ~[]E, E any](values S) exception.StackFrames {
 	frames := make(exception.StackFrames, 0, len(values))
 	for _, value := range values {
 		frames = append(frames, funcObject(value))

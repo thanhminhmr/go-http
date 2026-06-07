@@ -8,54 +8,94 @@ package http
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+
+	"github.com/thanhminhmr/go-common/either"
+	"github.com/thanhminhmr/go-exception"
 )
 
-type ServerResponse interface {
-	Render(writer http.ResponseWriter) error
+type ResponseBuilder struct {
+	header Header
 }
 
-type ServerResponseFunc func(writer http.ResponseWriter) error
-
-func (fn ServerResponseFunc) Render(writer http.ResponseWriter) error {
-	return fn(writer)
+func (c ResponseBuilder) HeaderAdd(key, value string) ResponseBuilder {
+	c.header.Add(key, value)
+	return c
 }
 
-type ServerErrorResponse struct {
-	Status Status
-	Cause  error
+func (c ResponseBuilder) HeaderSet(key, value string) ResponseBuilder {
+	c.header.Set(key, value)
+	return c
 }
 
-func (e ServerErrorResponse) Render(writer http.ResponseWriter) error {
-	header := writer.Header()
-	header.Add("Content-Type", "text/plain; charset=utf-8")
-	header.Add("X-Content-Type-Options", "nosniff")
-	writer.WriteHeader(int(e.Status))
-	_, err := writer.Write([]byte(e.Cause.Error()))
-	return err
+//func (c ResponseHeader) HeaderGet(key string) string { return c.header.Get(key) }
+
+//func (c ResponseHeader) HeaderValues(key string) []string { return c.header.Values(key) }
+
+func (c ResponseBuilder) AddCookie(cookie *Cookie) ResponseBuilder {
+	c.header.Add("Set-Cookie", cookie.String())
+	return c
 }
 
-type ServerJsonResponse struct {
-	Status   int
-	Response any
+func (c ResponseBuilder) BodyEmpty(status Status) Response {
+	return Response{status: status}
 }
 
-func (r ServerJsonResponse) Render(writer http.ResponseWriter) error {
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	writer.WriteHeader(r.Status)
-	return json.NewEncoder(writer).Encode(r.Response)
+func (c ResponseBuilder) BodyRaw(status Status, body []byte) Response {
+	return Response{status: status, body: BodyRaw(body)}
 }
 
-type CookieServerResponse struct {
-	Inner   ServerResponse
-	Cookies []http.Cookie
+func (c ResponseBuilder) BodyWriter(status Status, body ResponseBodyWriter) Response {
+	return Response{status: status, body: BodyWriter(body)}
 }
 
-func (c CookieServerResponse) Render(writer http.ResponseWriter) error {
-	for _, cookie := range c.Cookies {
-		if cookieString := cookie.String(); cookieString != "" {
-			writer.Header().Add("Set-Cookie", cookieString)
-		}
+func (c ResponseBuilder) Body(status Status, body ResponseBody) Response {
+	return Response{status: status, body: body}
+}
+
+func (c ResponseBuilder) BodyJson(status Status, body any) Response {
+	c.header.Set("Content-Type", "application/json; charset=utf-8")
+	return Response{
+		status: status,
+		body: BodyWriter(func(writer io.Writer) error {
+			encoder := json.NewEncoder(writer)
+			encoder.SetEscapeHTML(false)
+			return encoder.Encode(body)
+		}),
 	}
-	return c.Inner.Render(writer)
+}
+
+type ResponseBody = either.Either[[]byte, ResponseBodyWriter]
+
+type ResponseBodyWriter = func(io.Writer) error
+
+func BodyWriter(b ResponseBodyWriter) ResponseBody {
+	return either.Right[[]byte, ResponseBodyWriter](b)
+}
+
+func BodyRaw(b []byte) ResponseBody {
+	return either.Left[[]byte, ResponseBodyWriter](b)
+}
+
+type Response struct {
+	status Status
+	body   ResponseBody
+}
+
+func (r Response) MarshalJSON() ([]byte, error) {
+	bodyRaw, _ := r.body.Left()
+	var bodyWriter exception.StackFrame
+	if writer, exists := r.body.Right(); exists {
+		bodyWriter = funcObject(writer)
+	}
+	return json.Marshal(struct {
+		Status     string               `json:"status,omitempty"`
+		BodyRaw    []byte               `json:"body_raw,omitempty"`
+		BodyWriter exception.StackFrame `json:"body_writer,omitzero"`
+	}{
+		Status:     http.StatusText(r.status),
+		BodyRaw:    bodyRaw,
+		BodyWriter: bodyWriter,
+	})
 }

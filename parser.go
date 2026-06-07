@@ -22,15 +22,15 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/thanhminhmr/go-common/log"
+	"github.com/thanhminhmr/go-common/ctrl"
 	"github.com/thanhminhmr/go-exception"
 	"golang.org/x/net/html/charset"
 )
 
-type ServerRequestHandler[ServerRequest any] = func(ctx context.Context, request *ServerRequest) ServerResponse
+type RequestHandler[Request any] = func(ctx context.Context, request *Request, builder ResponseBuilder) (Response, error)
 
-// ServerRequestParser parses an HTTP request and populates a struct using field
-// tags to map request data to struct fields.
+// RequestParser parses an HTTP request and populates a struct using field tags
+// to map request data to struct fields.
 //
 // Tags are applied in the order listed below, from lowest to highest priority.
 // If multiple tags are present on the same field and more than one value is
@@ -41,12 +41,12 @@ type ServerRequestHandler[ServerRequest any] = func(ctx context.Context, request
 //
 //   - `header`: If the tag value is not empty, the tag value must match the
 //     normalized HTTP header name. If the tag value is empty, the field must be of
-//     type [http.Header], and only one field with this tag is allowed per struct.
+//     type [Header], and only one field with this tag is allowed per struct.
 //
 //   - `cookie`: If the tag value is not empty, the tag value must match the cookie
-//     name, and the field must be of type *[http.Cookie]. If the tag value is empty,
-//     the field must be of type []*[http.Cookie], and only one field with this tag
-//     is allowed per struct.
+//     name, and the field must be of type *[Cookie]. If the tag value is empty, the
+//     field must be of type []*[Cookie], and only one field with this tag is allowed
+//     per struct.
 //
 //   - `query`: If the tag value is not empty, the tag value must match the query
 //     parameter name. If the tag value is empty, the field must be of type
@@ -73,46 +73,51 @@ type ServerRequestHandler[ServerRequest any] = func(ctx context.Context, request
 //     be a semicolon-separated list of accepted Content-Types, and if `form`, `json`
 //     or `multipart` tag exists, the list must not contain those types. If the tag
 //     value is empty, the field will be mapped if no other body type are matched.
-func ServerRequestParser[ServerRequest any](handler ServerRequestHandler[ServerRequest]) http.HandlerFunc {
-	tags := createTags(reflect.TypeFor[ServerRequest]())
+func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFunc {
+	tags := createTags(reflect.TypeFor[Request]())
 	return func(writer http.ResponseWriter, request *http.Request) {
-		var parsed ServerRequest
-		serverRequestHandler(writer, request, &parsed, tags, func() ServerResponse {
-			return handler(request.Context(), &parsed)
+		var parsed Request
+		requestHandler(writer, request, &tags, &parsed, func() (Response, error) {
+			return handler(request.Context(), &parsed, ResponseBuilder{header: writer.Header()})
 		})
 	}
 }
 
-func serverRequestHandler(
+func requestHandler(
 	writer http.ResponseWriter,
 	request *http.Request,
+	tags *requestTags,
 	parsed any,
-	tags serverRequestTags,
-	handler func() ServerResponse,
+	handler func() (Response, error),
 ) {
-	logger := log.Logger(request.Context())
-	if errorResponse := tags.parse(request, parsed); errorResponse != nil {
-		logger.Error().With("error", errorResponse).Msg("Failed to parse request")
-		if err := errorResponse.Render(writer); err != nil {
-			logger.Error().With("error", err).Msg("Failed to render error")
-		}
+	logger := ctrl.LogCtx(request.Context())
+	if status, err := tags.parse(request, reflect.ValueOf(parsed).Elem()); err != nil {
+		logger.Error().Err(err).Msg("Failed to parse request")
+		writer.WriteHeader(status)
 		return
 	}
-	logger.Debug().With("request", parsed).Msg("Request parsed")
-	if renderer := handler(); renderer != nil {
-		logger.Debug().With("response", funcOrAny(renderer)).Msg("Response returned")
-		if err := renderer.Render(writer); err != nil {
-			logger.Error().With("error", err).Msg("Failed to render response")
-		}
+	logger.Debug().Any("parsed", parsed).Msg("Request parsed")
+	if response, err := handler(); err != nil {
+		logger.Debug().Err(err).Msg("Handler returned with error")
+		writer.WriteHeader(StatusInternalServerError)
 	} else {
-		logger.Debug().Msg("Empty response returned")
-		writer.WriteHeader(http.StatusNoContent)
+		logger.Debug().Any("response", response).Msg("Response returned")
+		writer.WriteHeader(response.status)
+		var err error
+		if raw, exists := response.body.Left(); exists {
+			_, err = writer.Write(raw)
+		} else if fn, exists := response.body.Right(); exists {
+			err = fn(writer)
+		}
+		if err != nil {
+			logger.Debug().Err(err).Msg("Failed to write response")
+		}
 	}
 }
 
-//region serverRequestTags
+//region requestTags
 
-type serverRequestTags struct {
+type requestTags struct {
 	flags               uint
 	headerFieldIndex    []int
 	cookieFieldIndex    []int
@@ -143,11 +148,11 @@ const (
 	contentTypeIsMultipart = "multipart/form-data"
 )
 
-func createTags(requestType reflect.Type) serverRequestTags {
+func createTags(requestType reflect.Type) requestTags {
 	if requestType.Kind() != reflect.Struct {
 		panic("BUG: parsed request must be a struct")
 	}
-	tags := serverRequestTags{}
+	tags := requestTags{}
 	tags.checkRecursively(requestType)
 	if tags.flags&tagForm != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsForm) {
 		panic("BUG: `form` tag field is not allowed when `body` tag contains " + contentTypeIsForm)
@@ -161,7 +166,7 @@ func createTags(requestType reflect.Type) serverRequestTags {
 	return tags
 }
 
-func (tags *serverRequestTags) checkRecursively(requestType reflect.Type) {
+func (tags *requestTags) checkRecursively(requestType reflect.Type) {
 	for index := range requestType.NumField() {
 		field := requestType.Field(index)
 		// skip if field is not exported
@@ -186,7 +191,7 @@ func (tags *serverRequestTags) checkRecursively(requestType reflect.Type) {
 				if tags.flags&tagHeader != 0 {
 					panic("BUG: multiple `header` tag fields are not allowed when empty `header` tag is present")
 				}
-				if field.Type != reflect.TypeFor[http.Header]() {
+				if field.Type != reflect.TypeFor[Header]() {
 					panic("BUG: empty `header` tag field must be a `http.Header`")
 				}
 				tags.headerFieldIndex = field.Index
@@ -199,7 +204,7 @@ func (tags *serverRequestTags) checkRecursively(requestType reflect.Type) {
 				if tags.cookieFieldIndex != nil {
 					panic("BUG: multiple `cookie` tag fields are not allowed when empty `cookie` tag is present")
 				}
-				if field.Type != reflect.TypeFor[*http.Cookie]() {
+				if field.Type != reflect.TypeFor[*Cookie]() {
 					panic("BUG: `cookie` tag field must be a `*http.Cookie`")
 				}
 				if tags.cookiesFieldMap == nil {
@@ -210,7 +215,7 @@ func (tags *serverRequestTags) checkRecursively(requestType reflect.Type) {
 				if tags.flags&tagCookie != 0 {
 					panic("BUG: multiple `cookie` tag fields are not allowed when empty `cookie` tag is present")
 				}
-				if field.Type != reflect.TypeFor[[]*http.Cookie]() {
+				if field.Type != reflect.TypeFor[[]*Cookie]() {
 					panic("BUG: empty `cookie` tag field must be a `[]*http.Cookie`")
 				}
 				tags.cookieFieldIndex = field.Index
@@ -310,17 +315,17 @@ func (tags *serverRequestTags) checkRecursively(requestType reflect.Type) {
 	}
 }
 
-//endregion serverRequestTags
+//endregion requestTags
 
-//region parseServerRequest
+//region parseRequest
 
-var serverRequestValidator = validator.New(validator.WithRequiredStructEnabled())
+var requestValidator = validator.New(validator.WithRequiredStructEnabled())
 
-func (tags *serverRequestTags) parse(request *http.Request, parsed any) (errorResponse *ServerErrorResponse) {
+func (tags *requestTags) parse(request *http.Request, parsed reflect.Value) (status Status, parseErr error) {
 	// parse and bind request header
 	if tags.flags&tagHeader != 0 {
-		if err := tags.bindHeader(request, parsed); err != nil {
-			return err
+		if status, parseErr = tags.bindHeader(request, parsed); parseErr != nil {
+			return
 		}
 	}
 	// parse and bind cookies
@@ -329,26 +334,24 @@ func (tags *serverRequestTags) parse(request *http.Request, parsed any) (errorRe
 	}
 	// parse and bind url query values
 	if tags.flags&tagQuery != 0 {
-		if err := tags.bindQuery(request, parsed); err != nil {
-			return err
+		if status, parseErr = tags.bindQuery(request, parsed); parseErr != nil {
+			return
 		}
 	}
 	// parse and bind url parameters
 	if tags.flags&tagUrl != 0 {
-		if err := tags.bindUrl(request, parsed); err != nil {
-			return err
+		if status, parseErr = tags.bindUrl(request, parsed); parseErr != nil {
+			return
 		}
 	}
 	// validate body later
 	defer func() {
-		if errorResponse != nil {
+		if parseErr != nil {
 			return
 		}
-		if err := serverRequestValidator.Struct(parsed); err != nil {
-			errorResponse = &ServerErrorResponse{
-				Cause:  exception.String("HttpServer: Request body is not valid").AddCause(err),
-				Status: http.StatusBadRequest,
-			}
+		if err := requestValidator.Struct(parsed); err != nil {
+			status = StatusBadRequest
+			parseErr = exception.String("HttpServer: Request body is not valid").AddCause(err)
 		}
 	}()
 	// parse and bind body
@@ -356,26 +359,18 @@ func (tags *serverRequestTags) parse(request *http.Request, parsed any) (errorRe
 	case http.MethodPost, http.MethodPut, http.MethodPatch:
 		contentTypeHeader := request.Header.Get("Content-Type")
 		if contentTypeHeader == "" {
-			return &ServerErrorResponse{
-				Cause:  exception.String("HttpServer: Content-Type is missing"),
-				Status: http.StatusUnsupportedMediaType,
-			}
+			return StatusUnsupportedMediaType, exception.String("HttpServer: Content-Type is missing")
 		}
 		// parse media type
 		contentType, contentTypeParameters, err := mime.ParseMediaType(contentTypeHeader)
 		if err != nil {
-			return &ServerErrorResponse{
-				Cause:  exception.String("HttpServer: Content-Type is invalid").AddCause(err),
-				Status: http.StatusBadRequest,
-			}
+			return StatusBadRequest, exception.String("HttpServer: Content-Type is invalid").AddCause(err)
 		}
 		// parse and bind request body as form
 		if tags.flags&tagForm != 0 && contentType == contentTypeIsForm {
 			if reader, err := charset.NewReader(request.Body, contentTypeHeader); err != nil {
-				return &ServerErrorResponse{
-					Cause:  exception.String("HttpServer: cannot determine body encoding").AddCause(err),
-					Status: http.StatusUnsupportedMediaType,
-				}
+				return StatusUnsupportedMediaType,
+					exception.String("HttpServer: cannot determine body encoding").AddCause(err)
 			} else {
 				return tags.bindForm(reader, parsed)
 			}
@@ -383,10 +378,8 @@ func (tags *serverRequestTags) parse(request *http.Request, parsed any) (errorRe
 		// parse and bind request body as JSON
 		if tags.flags&tagJson != 0 && contentType == contentTypeIsJson {
 			if reader, err := charset.NewReader(request.Body, contentTypeHeader); err != nil {
-				return &ServerErrorResponse{
-					Cause:  exception.String("HttpServer: cannot determine body encoding").AddCause(err),
-					Status: http.StatusUnsupportedMediaType,
-				}
+				return StatusUnsupportedMediaType,
+					exception.String("HttpServer: cannot determine body encoding").AddCause(err)
 			} else {
 				return tags.bindJson(reader, parsed)
 			}
@@ -398,43 +391,36 @@ func (tags *serverRequestTags) parse(request *http.Request, parsed any) (errorRe
 		// bind request body raw
 		if tags.flags&tagBody != 0 && (len(tags.bodyContentTypes) == 0 || slices.Contains(tags.bodyContentTypes, contentType)) {
 			tags.bindBody(request, parsed)
-			return nil
+			return
 		}
 		// nothing matched
-		return &ServerErrorResponse{
-			Cause:  exception.String("HttpServer: Content-Type is unsupported"),
-			Status: http.StatusUnsupportedMediaType,
-		}
+		return StatusUnsupportedMediaType, exception.String("HttpServer: Content-Type is unsupported")
 	}
-	return nil
+	return
 }
 
-func (tags *serverRequestTags) bindHeader(request *http.Request, parsed any) *ServerErrorResponse {
+func (tags *requestTags) bindHeader(request *http.Request, parsed reflect.Value) (_ Status, _ error) {
 	// parse and bind request header
 	if len(request.Header) > 0 {
 		if tags.headerFieldIndex != nil {
-			reflect.ValueOf(parsed).Elem().FieldByIndex(tags.headerFieldIndex).Set(reflect.ValueOf(request.Header))
+			parsed.FieldByIndex(tags.headerFieldIndex).Set(reflect.ValueOf(request.Header))
 		} else if err := bind("header", request.Header, parsed); err != nil {
-			return &ServerErrorResponse{
-				Cause:  exception.String("HttpServer: Bind request header failed").AddCause(err),
-				Status: http.StatusBadRequest,
-			}
+			return StatusBadRequest, exception.String("HttpServer: Bind request header failed").AddCause(err)
 		}
 	}
-	return nil
+	return
 }
 
-func (tags *serverRequestTags) bindCookie(request *http.Request, parsed any) {
+func (tags *requestTags) bindCookie(request *http.Request, parsed reflect.Value) {
 	// parse and bind cookies
 	if cookies := request.Cookies(); len(cookies) > 0 {
-		structValue := reflect.ValueOf(parsed).Elem()
 		if tags.cookieFieldIndex != nil {
-			structValue.FieldByIndex(tags.cookieFieldIndex).Set(reflect.ValueOf(cookies))
+			parsed.FieldByIndex(tags.cookieFieldIndex).Set(reflect.ValueOf(cookies))
 		} else {
 			for _, cookie := range cookies {
 				if fields, exists := tags.cookiesFieldMap[cookie.Name]; exists {
 					for _, field := range fields {
-						structValue.FieldByIndex(field).Set(reflect.ValueOf(cookie))
+						parsed.FieldByIndex(field).Set(reflect.ValueOf(cookie))
 					}
 				}
 			}
@@ -442,22 +428,19 @@ func (tags *serverRequestTags) bindCookie(request *http.Request, parsed any) {
 	}
 }
 
-func (tags *serverRequestTags) bindQuery(request *http.Request, parsed any) *ServerErrorResponse {
+func (tags *requestTags) bindQuery(request *http.Request, parsed reflect.Value) (_ Status, _ error) {
 	// parse and bind url query values
 	if values := request.URL.Query(); len(values) > 0 {
 		if tags.queryFieldIndex != nil {
-			reflect.ValueOf(parsed).Elem().FieldByIndex(tags.queryFieldIndex).Set(reflect.ValueOf(values))
+			parsed.FieldByIndex(tags.queryFieldIndex).Set(reflect.ValueOf(values))
 		} else if err := bind("query", values, parsed); err != nil {
-			return &ServerErrorResponse{
-				Cause:  exception.String("HttpServer: Bind query values failed").AddCause(err),
-				Status: http.StatusBadRequest,
-			}
+			return StatusBadRequest, exception.String("HttpServer: Bind query values failed").AddCause(err)
 		}
 	}
-	return nil
+	return
 }
 
-func (tags *serverRequestTags) bindUrl(request *http.Request, parsed any) *ServerErrorResponse {
+func (tags *requestTags) bindUrl(request *http.Request, parsed reflect.Value) (_ Status, _ error) {
 	// parse and bind url parameters
 	routeContext := chi.RouteContext(request.Context())
 	if len(routeContext.URLParams.Keys) > 0 {
@@ -466,83 +449,63 @@ func (tags *serverRequestTags) bindUrl(request *http.Request, parsed any) *Serve
 			urlParams[key] = routeContext.URLParams.Values[index]
 		}
 		if tags.urlFieldIndex != nil {
-			reflect.ValueOf(parsed).Elem().FieldByIndex(tags.urlFieldIndex).Set(reflect.ValueOf(urlParams))
+			parsed.FieldByIndex(tags.urlFieldIndex).Set(reflect.ValueOf(urlParams))
 		} else if err := bind("url", urlParams, parsed); err != nil {
-			return &ServerErrorResponse{
-				Cause:  exception.String("HttpServer: Bind url params failed").AddCause(err),
-				Status: http.StatusBadRequest,
-			}
+			return StatusBadRequest, exception.String("HttpServer: Bind url params failed").AddCause(err)
 		}
 	}
-	return nil
+	return
 }
 
-func (tags *serverRequestTags) bindForm(reader io.Reader, parsed any) *ServerErrorResponse {
+func (tags *requestTags) bindForm(reader io.Reader, parsed reflect.Value) (_ Status, _ error) {
 	// read the whole body at once
 	body, err := io.ReadAll(reader)
 	if err != nil {
-		return &ServerErrorResponse{
-			Cause:  exception.String("HttpServer: Read request body failed").AddCause(err),
-			Status: http.StatusInternalServerError,
-		}
+		return StatusInternalServerError, exception.String("HttpServer: Read request body failed").AddCause(err)
 	}
 	// parse form body
 	values, err := url.ParseQuery(string(body))
 	if err != nil {
-		return &ServerErrorResponse{
-			Cause:  exception.String("HttpServer: Parse form body failed").AddCause(err),
-			Status: http.StatusBadRequest,
-		}
+		return StatusBadRequest, exception.String("HttpServer: Parse form body failed").AddCause(err)
 	}
 	// bind form body
 	if tags.formFieldIndex != nil {
-		reflect.ValueOf(parsed).Elem().FieldByIndex(tags.formFieldIndex).Set(reflect.ValueOf(values))
+		parsed.FieldByIndex(tags.formFieldIndex).Set(reflect.ValueOf(values))
 	} else if err := bind("form", values, parsed); err != nil {
-		return &ServerErrorResponse{
-			Cause:  exception.String("HttpServer: Bind form params failed").AddCause(err),
-			Status: http.StatusBadRequest,
-		}
+		return StatusBadRequest, exception.String("HttpServer: Bind form params failed").AddCause(err)
 	}
-	return nil
+	return
 }
 
-func (tags *serverRequestTags) bindJson(reader io.Reader, parsed any) *ServerErrorResponse {
+func (tags *requestTags) bindJson(reader io.Reader, parsed reflect.Value) (_ Status, _ error) {
 	// decode the whole body to the JSON field
-	fieldAsInterface := reflect.ValueOf(parsed).Elem().FieldByIndex(tags.jsonFieldIndex).Addr().Interface()
-	if err := json.NewDecoder(reader).Decode(fieldAsInterface); err != nil {
-		return &ServerErrorResponse{
-			Cause:  exception.String("HttpServer: Decode JSON body failed").AddCause(err),
-			Status: http.StatusBadRequest,
-		}
+	jsonField := parsed.FieldByIndex(tags.jsonFieldIndex).Addr().Interface()
+	if err := json.NewDecoder(reader).Decode(jsonField); err != nil {
+		return StatusBadRequest, exception.String("HttpServer: Decode JSON body failed").AddCause(err)
 	}
-	return nil
+	return
 }
 
-func (tags *serverRequestTags) bindMultipart(request *http.Request, parsed any, parameters map[string]string) *ServerErrorResponse {
+func (tags *requestTags) bindMultipart(request *http.Request, parsed reflect.Value, parameters map[string]string) (_ Status, _ error) {
 	// get multipart boundary
 	boundary, ok := parameters["boundary"]
 	if !ok {
-		return &ServerErrorResponse{
-			Cause:  exception.String("HttpServer: Boundary is missing in Content-Type of a multipart/form-data"),
-			Status: http.StatusBadRequest,
-		}
+		return StatusBadRequest, exception.String("HttpServer: Boundary is missing in Content-Type of a multipart/form-data")
 	}
-	reflect.ValueOf(parsed).Elem().FieldByIndex(tags.multipartFieldIndex).
-		Set(reflect.ValueOf(multipart.NewReader(request.Body, boundary)))
-	return nil
+	parsed.FieldByIndex(tags.multipartFieldIndex).Set(reflect.ValueOf(multipart.NewReader(request.Body, boundary)))
+	return
 }
 
-func (tags *serverRequestTags) bindBody(request *http.Request, parsed any) {
-	reflect.ValueOf(parsed).Elem().FieldByIndex(tags.bodyFieldIndex).
-		Set(reflect.ValueOf(request.Body))
+func (tags *requestTags) bindBody(request *http.Request, parsed reflect.Value) {
+	parsed.FieldByIndex(tags.bodyFieldIndex).Set(reflect.ValueOf(request.Body))
 }
 
-func bind(tag string, input any, output any) error {
+func bind(tag string, input any, output reflect.Value) error {
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		DecodeHook:           internalDecodeHookFunc,
 		WeaklyTypedInput:     true,
 		Squash:               true,
-		Result:               output,
+		Result:               output.Addr().Interface(),
 		TagName:              tag,
 		SquashTagOption:      string([]byte{0xFF, 0xFF, 0xFF, 0xFF}), // No squash tag
 		IgnoreUntaggedFields: true,
@@ -556,7 +519,7 @@ func bind(tag string, input any, output any) error {
 	return nil
 }
 
-//endregion parseServerRequest
+//endregion parseRequest
 
 //region mapstructure
 

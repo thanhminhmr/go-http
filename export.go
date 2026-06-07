@@ -13,8 +13,6 @@ type Handler = http.Handler
 type HandlerFunc = http.HandlerFunc
 type Middleware = func(http.Handler) http.Handler
 type Header = http.Header
-type Request = http.Request
-type ResponseWriter = http.ResponseWriter
 
 type KeyValue = map[string]string
 type KeyValues = map[string][]string

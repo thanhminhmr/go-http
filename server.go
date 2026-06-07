@@ -17,7 +17,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/thanhminhmr/go-common/ctrl"
-	"github.com/thanhminhmr/go-common/log"
 	"github.com/thanhminhmr/go-exception"
 )
 
@@ -60,23 +59,24 @@ type httpServer struct {
 }
 
 func (s *httpServer) runner(ctx context.Context, shutdown context.CancelFunc) {
-	logger := log.Logger(ctx)
+	logger := ctrl.LogCtx(ctx)
 	// dump all routes
 	logger.Info().Msg("Listing all routes...")
 	if err := chi.Walk(s.router, func(method string, route string, handler Handler, middlewares ...Middleware) error {
-		logger.Info().With(
-			"method", method, "route", route, "handler", funcObject(handler), "middlewares", funcObjects(middlewares),
-		).Msg("Route")
+		logger.Info().Str("method", method).Str("route", route).
+			Object("handler", funcObject(handler)).
+			Array("middlewares", funcObjects(middlewares)).
+			Msg("Route")
 		return nil
 	}); err != nil {
-		logger.Error().With("error", err).Msg("Error walking routes")
+		logger.Error().Err(err).Msg("Error walking routes")
 		exception.Panic(err)
 	}
 	logger.Info().Msg("Listed all routes")
 	// start the server
-	logger.Info().With("address", s.server.Addr).Msg("Start serving")
+	logger.Info().Str("address", s.server.Addr).Msg("Start serving")
 	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error().With("error", err).Msg("Server closed with error")
+		logger.Error().Err(err).Msg("Server closed with error")
 		if s.config.ShutdownOnError {
 			shutdown()
 		}
@@ -84,29 +84,31 @@ func (s *httpServer) runner(ctx context.Context, shutdown context.CancelFunc) {
 }
 
 func (s *httpServer) cleaner(ctx context.Context) {
-	log.Logger(ctx).Info().Msg("Shutting down...")
+	logger := ctrl.LogCtx(ctx)
+	logger.Info().Msg("Shutting down...")
 	if err := s.server.Shutdown(ctx); err != nil {
-		log.Logger(ctx).Error().With("error", err).Msg("Error while shutting down")
+		logger.Error().Err(err).Msg("Error while shutting down")
 	}
-	log.Logger(ctx).Info().Msg("Shutdown complete")
+	logger.Info().Msg("Shutdown complete")
 }
 
 func requestLogger(next Handler) Handler {
 	return HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		logger := log.Logger(request.Context()).With("request_id", rand.Text())
+		logger := ctrl.LogCtx(request.Context()).With().Str("request_id", rand.Text()).Logger()
 		// log request and response
-		logger.Info().With("method", request.Method, "url", request.URL.String()).Msg("Request")
+		logger.Info().Str("method", request.Method).Str("url", request.URL.String()).Msg("Request")
 		start := time.Now()
 		wrappedWriter := middleware.NewWrapResponseWriter(writer, request.ProtoMajor)
 		defer func(start time.Time, wrappedWriter middleware.WrapResponseWriter) {
 			duration := time.Since(start)
-			logger.Info().
-				With("status", wrappedWriter.Status(), "bytes", wrappedWriter.BytesWritten(), "duration", duration.String()).
+			logger.Info().Int("status", wrappedWriter.Status()).
+				Int("bytes", wrappedWriter.BytesWritten()).
+				Dur("duration", duration).
 				Msg("Response")
 		}(start, wrappedWriter)
 		// recover any panic
 		defer exception.Recover(func(recovered exception.Exception) {
-			logger.Error().With("recovered", recovered).Msg("Recovered from panic")
+			logger.Error().Any("recovered", recovered).Msg("Recovered from panic")
 			// response with 500 Internal Server Error
 			if request.Header.Get("Connection") != "Upgrade" {
 				wrappedWriter.WriteHeader(http.StatusInternalServerError)
