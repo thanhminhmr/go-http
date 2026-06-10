@@ -59,7 +59,7 @@ type httpServer struct {
 }
 
 func (s *httpServer) runner(ctx context.Context, shutdown context.CancelFunc) {
-	logger := ctrl.LogCtx(ctx)
+	logger := ctrl.Logger(ctx)
 	// dump all routes
 	logger.Info().Msg("Listing all routes...")
 	if err := chi.Walk(s.router, func(method string, route string, handler Handler, middlewares ...Middleware) error {
@@ -84,7 +84,7 @@ func (s *httpServer) runner(ctx context.Context, shutdown context.CancelFunc) {
 }
 
 func (s *httpServer) cleaner(ctx context.Context) {
-	logger := ctrl.LogCtx(ctx)
+	logger := ctrl.Logger(ctx)
 	logger.Info().Msg("Shutting down...")
 	if err := s.server.Shutdown(ctx); err != nil {
 		logger.Error().Err(err).Msg("Error while shutting down")
@@ -94,7 +94,7 @@ func (s *httpServer) cleaner(ctx context.Context) {
 
 func requestLogger(next Handler) Handler {
 	return HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		logger := ctrl.LogCtx(request.Context()).With().Str("request_id", rand.Text()).Logger()
+		logger := ctrl.Logger(request.Context()).With().Str("request_id", rand.Text()).Logger()
 		// log request and response
 		logger.Info().Str("method", request.Method).Str("url", request.URL.String()).Msg("Request")
 		start := time.Now()
@@ -115,6 +115,6 @@ func requestLogger(next Handler) Handler {
 			}
 		})
 		// call the next handler
-		next.ServeHTTP(wrappedWriter, request.WithContext(logger))
+		next.ServeHTTP(wrappedWriter, request.WithContext(&logger))
 	})
 }

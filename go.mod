@@ -6,7 +6,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/go-viper/mapstructure/v2 v2.5.0
-	github.com/thanhminhmr/go-common v0.0.46
+	github.com/thanhminhmr/go-common v0.0.47
 	github.com/thanhminhmr/go-exception v0.0.15
 	golang.org/x/net v0.55.0
 )

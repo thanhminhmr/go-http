@@ -11,7 +11,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/thanhminhmr/go-common/either"
+	"github.com/thanhminhmr/go-common/common"
 	"github.com/thanhminhmr/go-exception"
 )
 
@@ -66,16 +66,16 @@ func (c ResponseBuilder) BodyJson(status Status, body any) Response {
 	}
 }
 
-type ResponseBody = either.Either[[]byte, ResponseBodyWriter]
+type ResponseBody = common.Either[[]byte, ResponseBodyWriter]
 
 type ResponseBodyWriter = func(io.Writer) error
 
 func BodyWriter(b ResponseBodyWriter) ResponseBody {
-	return either.Right[[]byte, ResponseBodyWriter](b)
+	return common.Right[[]byte, ResponseBodyWriter](b)
 }
 
 func BodyRaw(b []byte) ResponseBody {
-	return either.Left[[]byte, ResponseBodyWriter](b)
+	return common.Left[[]byte, ResponseBodyWriter](b)
 }
 
 type Response struct {

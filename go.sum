@@ -18,8 +18,8 @@ github.com/mattn/go-isatty v0.0.22 h1:j8l17JJ9i6VGPUFUYoTUKPSgKe/83EYU2zBC7YNKMw
 github.com/mattn/go-isatty v0.0.22/go.mod h1:ZXfXG4SQHsB/w3ZeOYbR0PrPwLy+n6xiMrJlRFqopa4=
 github.com/rs/zerolog v1.35.1 h1:m7xQeoiLIiV0BCEY4Hs+j2NG4Gp2o2KPKmhnnLiazKI=
 github.com/rs/zerolog v1.35.1/go.mod h1:EjML9kdfa/RMA7h/6z6pYmq1ykOuA8/mjWaEvGI+jcw=
-github.com/thanhminhmr/go-common v0.0.46 h1:f+tO/uSwciB5FS2yjiSaumObx1Ku8hYxMqhniNChvJk=
-github.com/thanhminhmr/go-common v0.0.46/go.mod h1:8/IlB+iotARqqAq97oHgkYsg4p/TSKyEB6DPyHm23+M=
+github.com/thanhminhmr/go-common v0.0.47 h1:vWWbzXZT8rGB7bnOVfIqItWyApPDvZRNFGeVnHcgMrI=
+github.com/thanhminhmr/go-common v0.0.47/go.mod h1:8/IlB+iotARqqAq97oHgkYsg4p/TSKyEB6DPyHm23+M=
 github.com/thanhminhmr/go-exception v0.0.15 h1:FBaE5Of/CludMxtEzSqmCLbX5VoL0trawX7TlMkHAgs=
 github.com/thanhminhmr/go-exception v0.0.15/go.mod h1:WKYWriLXOpRjRdpknWeLReBKrbd/YG0K261CdsL0r2c=
 golang.org/x/crypto v0.53.0 h1:QZ4Muo8THX6CizN2vPPd5fBGHyogrdK9fG4wLPFUsto=

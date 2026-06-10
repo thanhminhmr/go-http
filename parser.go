@@ -90,7 +90,7 @@ func requestHandler(
 	parsed any,
 	handler func() (Response, error),
 ) {
-	logger := ctrl.LogCtx(request.Context())
+	logger := ctrl.Logger(request.Context())
 	if status, err := tags.parse(request, reflect.ValueOf(parsed).Elem()); err != nil {
 		logger.Error().Err(err).Msg("Failed to parse request")
 		writer.WriteHeader(status)
