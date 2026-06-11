@@ -28,11 +28,11 @@ type ServerConfig struct {
 	ShutdownOnError   bool   `env:"HTTP_SERVER_SHUTDOWN_ON_ERROR" default:"true"`
 }
 
-func NewServer(config *ServerConfig) (*chi.Mux, ctrl.Starter) {
+func NewServer(config *ServerConfig) *chi.Mux {
 	// create route
 	router := chi.NewRouter()
-	// return the router and the starter func
-	return router, func(ctx context.Context) (ctrl.Runner, ctrl.Cleaner) {
+	// start the server
+	ctrl.Register(func(ctx context.Context) (ctrl.Runner, ctrl.Cleaner) {
 		// create the http server
 		server := httpServer{
 			config: config,
@@ -49,7 +49,9 @@ func NewServer(config *ServerConfig) (*chi.Mux, ctrl.Starter) {
 		router.Use(requestLogger)
 		// return the runner and the cleaner
 		return server.runner, server.cleaner
-	}
+	})
+	// return the router and the starter func
+	return router
 }
 
 type httpServer struct {
