@@ -7,7 +7,6 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"mime"
@@ -27,7 +26,7 @@ import (
 	"golang.org/x/net/html/charset"
 )
 
-type RequestHandler[Request any] = func(ctx context.Context, request *Request, builder ResponseBuilder) (Response, error)
+type RequestHandler[Request any] = func(ctx Context, request *Request) (Response, error)
 
 // RequestParser parses an HTTP request and populates a struct using field tags
 // to map request data to struct fields.
@@ -78,7 +77,7 @@ func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFun
 	return func(writer http.ResponseWriter, request *http.Request) {
 		var parsed Request
 		requestHandler(writer, request, &tags, &parsed, func() (Response, error) {
-			return handler(request.Context(), &parsed, ResponseBuilder{header: writer.Header()})
+			return handler(Context{Context: request.Context(), header: writer.Header()}, &parsed)
 		})
 	}
 }
@@ -102,14 +101,7 @@ func requestHandler(
 		writer.WriteHeader(StatusInternalServerError)
 	} else {
 		logger.Debug().Any("response", response).Msg("Response returned")
-		writer.WriteHeader(response.status)
-		var err error
-		if raw, exists := response.body.Left(); exists {
-			_, err = writer.Write(raw)
-		} else if fn, exists := response.body.Right(); exists {
-			err = fn(writer)
-		}
-		if err != nil {
+		if err := response.write(writer); err != nil {
 			logger.Debug().Err(err).Msg("Failed to write response")
 		}
 	}

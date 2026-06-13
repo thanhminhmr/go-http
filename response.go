@@ -7,95 +7,89 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 
-	"github.com/thanhminhmr/go-common/common"
+	"github.com/thanhminhmr/go-common/ctrl"
 	"github.com/thanhminhmr/go-exception"
 )
 
-type ResponseBuilder struct {
+type Context struct {
+	context.Context
 	header Header
 }
 
-func (c ResponseBuilder) HeaderAdd(key, value string) ResponseBuilder {
-	c.header.Add(key, value)
-	return c
-}
-
-func (c ResponseBuilder) HeaderSet(key, value string) ResponseBuilder {
-	c.header.Set(key, value)
-	return c
-}
-
-//func (c ResponseHeader) HeaderGet(key string) string { return c.header.Get(key) }
-
-//func (c ResponseHeader) HeaderValues(key string) []string { return c.header.Values(key) }
-
-func (c ResponseBuilder) AddCookie(cookie *Cookie) ResponseBuilder {
-	c.header.Add("Set-Cookie", cookie.String())
-	return c
-}
-
-func (c ResponseBuilder) BodyEmpty(status Status) Response {
-	return Response{status: status}
-}
-
-func (c ResponseBuilder) BodyRaw(status Status, body []byte) Response {
-	return Response{status: status, body: BodyRaw(body)}
-}
-
-func (c ResponseBuilder) BodyWriter(status Status, body ResponseBodyWriter) Response {
-	return Response{status: status, body: BodyWriter(body)}
-}
-
-func (c ResponseBuilder) Body(status Status, body ResponseBody) Response {
-	return Response{status: status, body: body}
-}
-
-func (c ResponseBuilder) BodyJson(status Status, body any) Response {
-	c.header.Set("Content-Type", "application/json; charset=utf-8")
+func (c Context) Response(status Status) Response {
 	return Response{
 		status: status,
-		body: BodyWriter(func(writer io.Writer) error {
-			encoder := json.NewEncoder(writer)
-			encoder.SetEscapeHTML(false)
-			return encoder.Encode(body)
-		}),
+		header: c.header,
+		body:   nil,
 	}
-}
-
-type ResponseBody = common.Either[[]byte, ResponseBodyWriter]
-
-type ResponseBodyWriter = func(io.Writer) error
-
-func BodyWriter(b ResponseBodyWriter) ResponseBody {
-	return common.Right[[]byte, ResponseBodyWriter](b)
-}
-
-func BodyRaw(b []byte) ResponseBody {
-	return common.Left[[]byte, ResponseBodyWriter](b)
 }
 
 type Response struct {
 	status Status
-	body   ResponseBody
+	header Header
+	body   any
 }
 
-func (r Response) MarshalJSON() ([]byte, error) {
-	bodyRaw, _ := r.body.Left()
-	var bodyWriter exception.StackFrame
-	if writer, exists := r.body.Right(); exists {
-		bodyWriter = funcObject(writer)
+func (r Response) Status() Status {
+	return r.status
+}
+
+func (r Response) Header() Header {
+	return r.header
+}
+
+func (r Response) Body() any {
+	return r.body
+}
+
+func (r Response) SetBody(body any) {
+	r.body = body
+}
+
+func (r Response) MarshalZerologObject(e *ctrl.LogEvent) {
+	e.Int("status", r.status)
+	if len(r.header) > 0 {
+		e.Any("header", r.header)
 	}
-	return json.Marshal(struct {
-		Status     string               `json:"status,omitempty"`
-		BodyRaw    []byte               `json:"body_raw,omitempty"`
-		BodyWriter exception.StackFrame `json:"body_writer,omitzero"`
-	}{
-		Status:     http.StatusText(r.status),
-		BodyRaw:    bodyRaw,
-		BodyWriter: bodyWriter,
-	})
+	if r.body != nil {
+		e.Any("body", r.body)
+	}
+}
+
+type RawBody = []byte
+type StringBody = string
+type StreamBody = func(io.Writer) error
+type JsonBody = struct{ any }
+
+func (r Response) write(writer http.ResponseWriter) error {
+	switch body := r.body.(type) {
+	case nil:
+		writer.WriteHeader(r.status)
+		return nil
+	case RawBody:
+		writer.WriteHeader(r.status)
+		_, err := writer.Write(body)
+		return err
+	case StringBody:
+		writer.WriteHeader(r.status)
+		_, err := writer.Write([]byte(body))
+		return err
+	case StreamBody:
+		writer.WriteHeader(r.status)
+		return body(writer)
+	case JsonBody:
+		r.header.Set("Content-Type", "application/json; charset=utf-8")
+		writer.WriteHeader(r.status)
+		data, err := json.Marshal(body.any)
+		if err == nil {
+			_, err = writer.Write(data)
+		}
+		return err
+	}
+	return exception.String("Response: unsupported body type")
 }
