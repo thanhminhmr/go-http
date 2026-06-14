@@ -9,6 +9,7 @@ require (
 	github.com/thanhminhmr/go-common v0.0.48
 	github.com/thanhminhmr/go-exception v0.0.15
 	golang.org/x/net v0.56.0
+	golang.org/x/text v0.38.0
 )
 
 require (
@@ -21,5 +22,4 @@ require (
 	github.com/rs/zerolog v1.35.1 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
 )

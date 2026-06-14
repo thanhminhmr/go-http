@@ -23,7 +23,6 @@ import (
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/thanhminhmr/go-common/ctrl"
 	"github.com/thanhminhmr/go-exception"
-	"golang.org/x/net/html/charset"
 )
 
 type RequestHandler[Request any] = func(ctx Context, request Request) (Response, error)
@@ -357,7 +356,7 @@ func (tags *requestTags) parse(request *http.Request, parsed reflect.Value) (sta
 		}
 		// parse and bind request body as form
 		if tags.flags&tagForm != 0 && contentType == contentTypeIsForm {
-			if reader, err := charset.NewReader(request.Body, contentTypeHeader); err != nil {
+			if reader, err := charsetReader(request.Body, contentTypeParameters); err != nil {
 				return StatusUnsupportedMediaType,
 					exception.String("HttpServer: cannot determine body encoding").AddCause(err)
 			} else {
@@ -366,7 +365,7 @@ func (tags *requestTags) parse(request *http.Request, parsed reflect.Value) (sta
 		}
 		// parse and bind request body as JSON
 		if tags.flags&tagJson != 0 && contentType == contentTypeIsJson {
-			if reader, err := charset.NewReader(request.Body, contentTypeHeader); err != nil {
+			if reader, err := charsetReader(request.Body, contentTypeParameters); err != nil {
 				return StatusUnsupportedMediaType,
 					exception.String("HttpServer: cannot determine body encoding").AddCause(err)
 			} else {
@@ -388,7 +387,7 @@ func (tags *requestTags) parse(request *http.Request, parsed reflect.Value) (sta
 	return
 }
 
-func (tags *requestTags) bindHeader(request *http.Request, parsed reflect.Value) (_ Status, _ error) {
+func (tags *requestTags) bindHeader(request *http.Request, parsed reflect.Value) (Status, error) {
 	// parse and bind request header
 	if len(request.Header) > 0 {
 		if tags.headerFieldIndex != nil {
@@ -397,7 +396,7 @@ func (tags *requestTags) bindHeader(request *http.Request, parsed reflect.Value)
 			return StatusBadRequest, exception.String("HttpServer: Bind request header failed").AddCause(err)
 		}
 	}
-	return
+	return 0, nil
 }
 
 func (tags *requestTags) bindCookie(request *http.Request, parsed reflect.Value) {
@@ -417,7 +416,7 @@ func (tags *requestTags) bindCookie(request *http.Request, parsed reflect.Value)
 	}
 }
 
-func (tags *requestTags) bindQuery(request *http.Request, parsed reflect.Value) (_ Status, _ error) {
+func (tags *requestTags) bindQuery(request *http.Request, parsed reflect.Value) (Status, error) {
 	// parse and bind url query values
 	if values := request.URL.Query(); len(values) > 0 {
 		if tags.queryFieldIndex != nil {
@@ -426,10 +425,10 @@ func (tags *requestTags) bindQuery(request *http.Request, parsed reflect.Value) 
 			return StatusBadRequest, exception.String("HttpServer: Bind query values failed").AddCause(err)
 		}
 	}
-	return
+	return 0, nil
 }
 
-func (tags *requestTags) bindUrl(request *http.Request, parsed reflect.Value) (_ Status, _ error) {
+func (tags *requestTags) bindUrl(request *http.Request, parsed reflect.Value) (Status, error) {
 	// parse and bind url parameters
 	routeContext := chi.RouteContext(request.Context())
 	if len(routeContext.URLParams.Keys) > 0 {
@@ -443,13 +442,13 @@ func (tags *requestTags) bindUrl(request *http.Request, parsed reflect.Value) (_
 			return StatusBadRequest, exception.String("HttpServer: Bind url params failed").AddCause(err)
 		}
 	}
-	return
+	return 0, nil
 }
 
-func (tags *requestTags) bindForm(reader io.Reader, parsed reflect.Value) (_ Status, _ error) {
+func (tags *requestTags) bindForm(reader io.Reader, parsed reflect.Value) (Status, error) {
 	// read the whole body at once
 	body, err := io.ReadAll(reader)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return StatusInternalServerError, exception.String("HttpServer: Read request body failed").AddCause(err)
 	}
 	// parse form body
@@ -463,26 +462,28 @@ func (tags *requestTags) bindForm(reader io.Reader, parsed reflect.Value) (_ Sta
 	} else if err := bind("form", values, parsed); err != nil {
 		return StatusBadRequest, exception.String("HttpServer: Bind form params failed").AddCause(err)
 	}
-	return
+	return 0, nil
 }
 
-func (tags *requestTags) bindJson(reader io.Reader, parsed reflect.Value) (_ Status, _ error) {
+func (tags *requestTags) bindJson(reader io.Reader, parsed reflect.Value) (Status, error) {
 	// decode the whole body to the JSON field
 	jsonField := parsed.FieldByIndex(tags.jsonFieldIndex).Addr().Interface()
 	if err := json.NewDecoder(reader).Decode(jsonField); err != nil {
 		return StatusBadRequest, exception.String("HttpServer: Decode JSON body failed").AddCause(err)
 	}
-	return
+	return 0, nil
 }
 
-func (tags *requestTags) bindMultipart(request *http.Request, parsed reflect.Value, parameters map[string]string) (_ Status, _ error) {
+func (tags *requestTags) bindMultipart(
+	request *http.Request, parsed reflect.Value, parameters map[string]string,
+) (Status, error) {
 	// get multipart boundary
 	boundary, ok := parameters["boundary"]
 	if !ok {
 		return StatusBadRequest, exception.String("HttpServer: Boundary is missing in Content-Type of a multipart/form-data")
 	}
 	parsed.FieldByIndex(tags.multipartFieldIndex).Set(reflect.ValueOf(multipart.NewReader(request.Body, boundary)))
-	return
+	return 0, nil
 }
 
 func (tags *requestTags) bindBody(request *http.Request, parsed reflect.Value) {
