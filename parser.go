@@ -26,7 +26,7 @@ import (
 	"golang.org/x/net/html/charset"
 )
 
-type RequestHandler[Request any] = func(ctx Context, request *Request) (Response, error)
+type RequestHandler[Request any] = func(ctx Context, request Request) (Response, error)
 
 // RequestParser parses an HTTP request and populates a struct using field tags
 // to map request data to struct fields.
@@ -65,7 +65,7 @@ type RequestHandler[Request any] = func(ctx Context, request *Request) (Response
 //     process.
 //
 //   - `multipart`: The tag value must be empty. Only one field with this tag
-//     is allowed per struct. The field must be of type [multipart.Reader].
+//     is allowed per struct. The field must be of type [*multipart.Reader].
 //
 //   - `body`: Only one field with this tag is allowed per struct. The field must
 //     be of type [io.ReadCloser]. If the tag value is not empty, the tag value must
@@ -77,17 +77,14 @@ func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFun
 	return func(writer http.ResponseWriter, request *http.Request) {
 		var parsed Request
 		requestHandler(writer, request, &tags, &parsed, func() (Response, error) {
-			return handler(Context{Context: request.Context(), header: writer.Header()}, &parsed)
+			return handler(Context{Context: request.Context(), header: writer.Header()}, parsed)
 		})
 	}
 }
 
 func requestHandler(
-	writer http.ResponseWriter,
-	request *http.Request,
-	tags *requestTags,
-	parsed any,
-	handler func() (Response, error),
+	writer http.ResponseWriter, request *http.Request, tags *requestTags,
+	parsed any, handler func() (Response, error),
 ) {
 	logger := ctrl.Logger(request.Context())
 	if status, err := tags.parse(request, reflect.ValueOf(parsed).Elem()); err != nil {
@@ -284,8 +281,8 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type) {
 			if tags.flags&tagMultipart != 0 {
 				panic("BUG: multiple `multipart` tag fields are not allowed")
 			}
-			if field.Type != reflect.TypeFor[multipart.Reader]() {
-				panic("BUG: `multipart` tag field must be a `multipart.Reader`")
+			if field.Type != reflect.TypeFor[*multipart.Reader]() {
+				panic("BUG: `multipart` tag field must be a `*multipart.Reader`")
 			}
 			tags.flags = tags.flags | tagMultipart
 			tags.multipartFieldIndex = field.Index
