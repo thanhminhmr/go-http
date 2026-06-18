@@ -99,14 +99,17 @@ func requestHandler(
 		return
 	}
 	logger.Debug().Any("parsed", parsed).Msg("Request parsed")
-	if response, err := handler(); err != nil {
+	response, err := handler()
+	if err != nil {
 		logger.Debug().Err(err).Msg("Handler returned with error")
-		writer.WriteHeader(StatusInternalServerError)
+		if response.status == 0 {
+			response = Response{status: StatusInternalServerError}
+		}
 	} else {
 		logger.Debug().Any("response", response).Msg("Response returned")
-		if err := response.write(writer); err != nil {
-			logger.Debug().Err(err).Msg("Failed to write response")
-		}
+	}
+	if err := response.write(writer); err != nil {
+		logger.Debug().Err(err).Msg("Failed to write response")
 	}
 }
 
