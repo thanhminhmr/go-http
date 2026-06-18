@@ -81,6 +81,8 @@ func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFun
 	}
 }
 
+var requestValidator = validator.New(validator.WithRequiredStructEnabled())
+
 func requestHandler(
 	writer http.ResponseWriter, request *http.Request, tags *requestTags,
 	parsed any, handler func() (Response, error),
@@ -89,6 +91,11 @@ func requestHandler(
 	if status, err := tags.parse(request, reflect.ValueOf(parsed).Elem()); err != nil {
 		logger.Error().Err(err).Msg("Failed to parse request")
 		writer.WriteHeader(status)
+		return
+	}
+	if err := requestValidator.Struct(parsed); err != nil {
+		logger.Error().Err(err).Msg("Failed to validate request")
+		writer.WriteHeader(StatusBadRequest)
 		return
 	}
 	logger.Debug().Any("parsed", parsed).Msg("Request parsed")
@@ -307,8 +314,6 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type) {
 
 //region parseRequest
 
-var requestValidator = validator.New(validator.WithRequiredStructEnabled())
-
 func (tags *requestTags) parse(request *http.Request, parsed reflect.Value) (status Status, parseErr error) {
 	// parse and bind request header
 	if tags.flags&tagHeader != 0 {
@@ -332,16 +337,6 @@ func (tags *requestTags) parse(request *http.Request, parsed reflect.Value) (sta
 			return
 		}
 	}
-	// validate body later
-	defer func() {
-		if parseErr != nil {
-			return
-		}
-		if err := requestValidator.Struct(parsed); err != nil {
-			status = StatusBadRequest
-			parseErr = exception.String("HttpServer: Request body is not valid").AddCause(err)
-		}
-	}()
 	// parse and bind body
 	switch request.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch:
