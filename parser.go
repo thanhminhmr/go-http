@@ -7,6 +7,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"mime"
@@ -25,7 +26,7 @@ import (
 	"github.com/thanhminhmr/go-exception"
 )
 
-type RequestHandler[Request any] = func(ctx Context, request Request) (Response, error)
+type RequestHandler[Request any] = func(ctx context.Context, request Request) (Response, error)
 
 // RequestParser parses an HTTP request and populates a struct using field tags
 // to map request data to struct fields.
@@ -75,8 +76,28 @@ func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFun
 	tags := createTags(reflect.TypeFor[Request]())
 	return func(writer http.ResponseWriter, request *http.Request) {
 		var parsed Request
-		requestHandler(writer, request, &tags, &parsed, func() (Response, error) {
-			return handler(Context{Context: request.Context(), header: writer.Header()}, parsed)
+		requestHandler(writer, request, &tags, &parsed, func(ctx context.Context) (Response, error) {
+			return handler(ctx, parsed)
+		})
+	}
+}
+
+type MiddlewareNext = func(ctx context.Context) (Response, error)
+type MiddlewareHandler[Request any] = func(ctx context.Context, request Request, next MiddlewareNext) (Response, error)
+
+func MiddlewareParser[Request any](handler MiddlewareHandler[Request]) Middleware {
+	tags := createTags(reflect.TypeFor[Request]())
+	return func(next Handler) Handler {
+		nextFunc := func(ctx context.Context) (Response, error) {
+			data := contextData(ctx)
+			next.ServeHTTP(data.writer, data.request)
+			return data.response, data.err
+		}
+		return HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			var parsed Request
+			requestHandler(writer, request, &tags, &parsed, func(ctx context.Context) (Response, error) {
+				return handler(ctx, parsed, nextFunc)
+			})
 		})
 	}
 }
@@ -85,31 +106,47 @@ var requestValidator = validator.New(validator.WithRequiredStructEnabled())
 
 func requestHandler(
 	writer http.ResponseWriter, request *http.Request, tags *requestTags,
-	parsed any, handler func() (Response, error),
+	parsed any, handler func(ctx context.Context) (Response, error),
 ) {
+	// get context and context data
 	logger := ctrl.Logger(request.Context())
+	data, first := contextData(logger), false
+	if data == nil {
+		logger, data = newContext(logger, writer, request)
+		first = true
+	}
+	// parse request
 	if status, err := tags.parse(request, reflect.ValueOf(parsed).Elem()); err != nil {
 		logger.Error().Err(err).Msg("Failed to parse request")
 		writer.WriteHeader(status)
 		return
 	}
+	// validate request
 	if err := requestValidator.Struct(parsed); err != nil {
 		logger.Error().Err(err).Msg("Failed to validate request")
 		writer.WriteHeader(StatusBadRequest)
 		return
 	}
 	logger.Debug().Any("parsed", parsed).Msg("Request parsed")
-	response, err := handler()
+	// call handler and log response
+	response, err := handler(logger)
 	if err != nil {
-		logger.Debug().Err(err).Msg("Handler returned with error")
+		logger.Error().Err(err).Msg("Handler returned with error")
 		if response.status == 0 {
 			response = Response{status: StatusInternalServerError}
 		}
 	} else {
-		logger.Debug().Any("response", response).Msg("Response returned")
+		logger.Debug().Any("response", response).Bool("first", first).Msg("Response returned")
 	}
-	if err := response.write(writer); err != nil {
-		logger.Debug().Err(err).Msg("Failed to write response")
+	// write response if first in stack
+	if first {
+		if err := response.write(writer); err != nil {
+			logger.Error().Err(err).Msg("Failed to write response")
+		} else {
+			logger.Debug().Msg("Response written")
+		}
+	} else {
+		data.response, data.err = response, err
 	}
 }
 
@@ -146,11 +183,16 @@ const (
 	contentTypeIsMultipart = "multipart/form-data"
 )
 
+var globalTags = map[reflect.Type]requestTags{}
+
 func createTags(requestType reflect.Type) requestTags {
 	if requestType.Kind() != reflect.Struct {
 		panic("BUG: parsed request must be a struct")
 	}
-	tags := requestTags{}
+	tags, exists := globalTags[requestType]
+	if exists {
+		return tags
+	}
 	tags.checkRecursively(requestType)
 	if tags.flags&tagForm != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsForm) {
 		panic("BUG: `form` tag field is not allowed when `body` tag contains " + contentTypeIsForm)
@@ -161,6 +203,7 @@ func createTags(requestType reflect.Type) requestTags {
 	if tags.flags&tagMultipart != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsMultipart) {
 		panic("BUG: `multipart` tag field is not allowed when `body` tag contains " + contentTypeIsMultipart)
 	}
+	globalTags[requestType] = tags
 	return tags
 }
 

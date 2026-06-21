@@ -11,28 +11,42 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 
 	"github.com/thanhminhmr/go-common/ctrl"
 	"github.com/thanhminhmr/go-exception"
 )
 
-type Context struct {
-	context.Context
-	header Header
+type ctxData struct {
+	writer   http.ResponseWriter
+	request  *http.Request
+	response Response
+	err      error
 }
 
-func (c Context) Response(status Status) Response {
-	return Response{
-		status: status,
-		header: c.header,
-		body:   nil,
+func newContext(ctx *ctrl.LogCtx, writer http.ResponseWriter, request *http.Request) (*ctrl.LogCtx, *ctxData) {
+	data := ctxData{writer: writer}
+	ctx = ctx.WithValue(reflect.TypeFor[ctxData](), &data)
+	data.request = request.WithContext(ctx)
+	return ctx, &data
+}
+
+func contextData(ctx context.Context) *ctxData {
+	if ctx == nil {
+		return nil
 	}
+	data, _ := ctx.Value(reflect.TypeFor[ctxData]()).(*ctxData)
+	return data
+}
+
+func NewResponse(ctx context.Context, status Status) Response {
+	return Response{status: status, header: contextData(ctx).writer.Header()}
 }
 
 type Response struct {
 	status Status
 	header Header
-	body   any
+	Body   any
 }
 
 func (r Response) Status() Status {
@@ -43,21 +57,13 @@ func (r Response) Header() Header {
 	return r.header
 }
 
-func (r Response) Body() any {
-	return r.body
-}
-
-func (r Response) SetBody(body any) {
-	r.body = body
-}
-
 func (r Response) MarshalZerologObject(e *ctrl.LogEvent) {
 	e.Int("status", r.status)
 	if len(r.header) > 0 {
 		e.Any("header", r.header)
 	}
-	if r.body != nil {
-		e.Any("body", r.body)
+	if r.Body != nil {
+		e.Any("body", r.Body)
 	}
 }
 
@@ -67,7 +73,7 @@ type StreamBody = func(io.Writer) error
 type JsonBody = struct{ any }
 
 func (r Response) write(writer http.ResponseWriter) error {
-	switch body := r.body.(type) {
+	switch body := r.Body.(type) {
 	case nil:
 		writer.WriteHeader(r.status)
 		return nil
