@@ -57,6 +57,36 @@ func (r Response) Header() Header {
 	return r.header
 }
 
+func (r Response) Cookie(cookie http.Cookie) Response {
+	r.header.Add("Set-Cookie", cookie.String())
+	return r
+}
+
+func (r Response) BytesBody(body []byte) Response {
+	r.Body = body
+	return r
+}
+
+func (r Response) StringBody(body string) Response {
+	r.Body = body
+	return r
+}
+
+func (r Response) StreamBody(body func(io.Writer) error) Response {
+	r.Body = body
+	return r
+}
+
+func (r Response) OctetsBody(body []byte) Response {
+	r.Body = OctetsBody{body: body}
+	return r
+}
+
+func (r Response) JsonBody(body any) Response {
+	r.Body = JsonBody{body: body}
+	return r
+}
+
 func (r Response) MarshalZerologObject(e *ctrl.LogEvent) {
 	e.Int("status", r.status)
 	if len(r.header) > 0 {
@@ -67,17 +97,18 @@ func (r Response) MarshalZerologObject(e *ctrl.LogEvent) {
 	}
 }
 
-type RawBody = []byte
+type BytesBody = []byte
 type StringBody = string
 type StreamBody = func(io.Writer) error
-type JsonBody = struct{ any }
+type OctetsBody = struct{ body []byte }
+type JsonBody = struct{ body any }
 
 func (r Response) write(writer http.ResponseWriter) error {
 	switch body := r.Body.(type) {
 	case nil:
 		writer.WriteHeader(r.status)
 		return nil
-	case RawBody:
+	case BytesBody:
 		writer.WriteHeader(r.status)
 		_, err := writer.Write(body)
 		return err
@@ -88,10 +119,15 @@ func (r Response) write(writer http.ResponseWriter) error {
 	case StreamBody:
 		writer.WriteHeader(r.status)
 		return body(writer)
+	case OctetsBody:
+		r.header.Set("Content-Type", "application/octet-stream")
+		writer.WriteHeader(r.status)
+		_, err := writer.Write(body.body)
+		return err
 	case JsonBody:
 		r.header.Set("Content-Type", "application/json; charset=utf-8")
 		writer.WriteHeader(r.status)
-		data, err := json.Marshal(body.any)
+		data, err := json.Marshal(body.body)
 		if err == nil {
 			_, err = writer.Write(data)
 		}

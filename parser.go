@@ -386,6 +386,11 @@ func (tags *requestTags) parse(request *http.Request, parsed reflect.Value) (sta
 	// parse and bind body
 	switch request.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch:
+		// check for empty request
+		if request.ContentLength == 0 {
+			return
+		}
+		// get content type
 		contentTypeHeader := request.Header.Get("Content-Type")
 		if contentTypeHeader == "" {
 			return StatusUnsupportedMediaType, exception.String("HttpServer: Content-Type is missing")
