@@ -369,7 +369,9 @@ func (tags *requestTags) parse(request *http.Request, parsed reflect.Value) (sta
 	}
 	// parse and bind cookies
 	if tags.flags&tagCookie != 0 {
-		tags.bindCookie(request, parsed)
+		if status, parseErr = tags.bindCookie(request, parsed); parseErr != nil {
+			return
+		}
 	}
 	// parse and bind url query values
 	if tags.flags&tagQuery != 0 {
@@ -445,14 +447,22 @@ func (tags *requestTags) bindHeader(request *http.Request, parsed reflect.Value)
 	return 0, nil
 }
 
-func (tags *requestTags) bindCookie(request *http.Request, parsed reflect.Value) {
+func (tags *requestTags) bindCookie(request *http.Request, parsed reflect.Value) (Status, error) {
 	// parse and bind cookies
 	if cookies := request.Cookies(); len(cookies) > 0 {
 		if tags.cookieFieldIndex != nil {
+			for _, cookie := range cookies {
+				if err := cookie.Valid(); err != nil {
+					return StatusBadRequest, exception.String("HttpServer: Invalid cookie").AddCause(err)
+				}
+			}
 			parsed.FieldByIndex(tags.cookieFieldIndex).Set(reflect.ValueOf(cookies))
 		} else {
 			for _, cookie := range cookies {
 				if fields, exists := tags.cookiesFieldMap[cookie.Name]; exists {
+					if err := cookie.Valid(); err != nil {
+						return StatusBadRequest, exception.String("HttpServer: Invalid cookie").AddCause(err)
+					}
 					for _, field := range fields {
 						parsed.FieldByIndex(field).Set(reflect.ValueOf(cookie))
 					}
@@ -460,6 +470,7 @@ func (tags *requestTags) bindCookie(request *http.Request, parsed reflect.Value)
 			}
 		}
 	}
+	return 0, nil
 }
 
 func (tags *requestTags) bindQuery(request *http.Request, parsed reflect.Value) (Status, error) {
