@@ -32,7 +32,7 @@ func NewResponse(ctx context.Context, status Status) Response {
 type Response struct {
 	status Status
 	header Header
-	Body   any
+	body   any
 }
 
 func (r Response) Status() Status {
@@ -49,27 +49,27 @@ func (r Response) Cookie(cookie http.Cookie) Response {
 }
 
 func (r Response) BytesBody(body []byte) Response {
-	r.Body = body
+	r.body = body
 	return r
 }
 
 func (r Response) StringBody(body string) Response {
-	r.Body = body
+	r.body = body
 	return r
 }
 
 func (r Response) StreamBody(body func(io.Writer) error) Response {
-	r.Body = body
+	r.body = body
 	return r
 }
 
 func (r Response) OctetsBody(body []byte) Response {
-	r.Body = OctetsBody{body: body}
+	r.body = octetsBody{body: body}
 	return r
 }
 
 func (r Response) JsonBody(body any) Response {
-	r.Body = JsonBody{body: body}
+	r.body = jsonBody{body: body}
 	return r
 }
 
@@ -78,39 +78,43 @@ func (r Response) MarshalZerologObject(e *ctrl.LogEvent) {
 	if len(r.header) > 0 {
 		e.Any("header", r.header)
 	}
-	if r.Body != nil {
-		e.Any("body", r.Body)
+	if r.body != nil {
+		switch body := r.body.(type) {
+		case octetsBody:
+			e.Bytes("body", body.body)
+		case jsonBody:
+			e.Any("body", body.body)
+		default:
+			e.Any("body", r.body)
+		}
 	}
 }
 
-type BytesBody = []byte
-type StringBody = string
-type StreamBody = func(io.Writer) error
-type OctetsBody = struct{ body []byte }
-type JsonBody = struct{ body any }
+type octetsBody = struct{ body []byte }
+type jsonBody = struct{ body any }
 
 func (r Response) write(writer http.ResponseWriter) error {
-	switch body := r.Body.(type) {
+	switch body := r.body.(type) {
 	case nil:
 		writer.WriteHeader(r.status)
 		return nil
-	case BytesBody:
+	case []byte:
 		writer.WriteHeader(r.status)
 		_, err := writer.Write(body)
 		return err
-	case StringBody:
+	case string:
 		writer.WriteHeader(r.status)
 		_, err := writer.Write([]byte(body))
 		return err
-	case StreamBody:
+	case func(io.Writer) error:
 		writer.WriteHeader(r.status)
 		return body(writer)
-	case OctetsBody:
+	case octetsBody:
 		r.header.Set("Content-Type", "application/octet-stream")
 		writer.WriteHeader(r.status)
 		_, err := writer.Write(body.body)
 		return err
-	case JsonBody:
+	case jsonBody:
 		r.header.Set("Content-Type", "application/json; charset=utf-8")
 		writer.WriteHeader(r.status)
 		data, err := json.Marshal(body.body)
