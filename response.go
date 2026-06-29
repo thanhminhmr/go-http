@@ -17,30 +17,16 @@ import (
 	"github.com/thanhminhmr/go-exception"
 )
 
-type ctxData struct {
-	writer   http.ResponseWriter
-	request  *http.Request
-	response Response
-	err      error
-}
-
-func newContext(ctx *ctrl.LogCtx, writer http.ResponseWriter, request *http.Request) (*ctrl.LogCtx, *ctxData) {
-	data := ctxData{writer: writer}
-	ctx = ctx.WithValue(reflect.TypeFor[ctxData](), &data)
-	data.request = request.WithContext(ctx)
-	return ctx, &data
-}
-
-func contextData(ctx context.Context) *ctxData {
-	if ctx == nil {
-		return nil
-	}
-	data, _ := ctx.Value(reflect.TypeFor[ctxData]()).(*ctxData)
-	return data
+func newContext(ctx *ctrl.LogCtx, writer http.ResponseWriter) *ctrl.LogCtx {
+	return ctx.WithValue(reflect.TypeFor[Response](), writer.Header())
 }
 
 func NewResponse(ctx context.Context, status Status) Response {
-	return Response{status: status, header: contextData(ctx).writer.Header()}
+	if header, ok := ctx.Value(reflect.TypeFor[Response]()).(http.Header); !ok || header == nil {
+		panic("BUG: response header missing")
+	} else {
+		return Response{status: status, header: header}
+	}
 }
 
 type Response struct {
