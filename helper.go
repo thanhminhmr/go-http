@@ -9,8 +9,6 @@ package http
 import (
 	"bufio"
 	"io"
-	"reflect"
-	"runtime"
 
 	"github.com/thanhminhmr/go-exception"
 	"golang.org/x/net/html/charset"
@@ -20,39 +18,13 @@ import (
 )
 
 func funcObject(v any) exception.StackFrame {
-	if v == nil {
-		return exception.StackFrame{
-			Function: "<nil>",
-			File:     "",
-			Line:     0,
-		}
+	if frame, ok := exception.Function(v); ok {
+		return frame
 	}
-	r := reflect.ValueOf(v)
-	for r.Kind() == reflect.Ptr || r.Kind() == reflect.Interface {
-		r = r.Elem()
-	}
-	switch r.Kind() {
-	case reflect.Func:
-		f := runtime.FuncForPC(r.Pointer())
-		if f == nil {
-			return exception.StackFrame{
-				Function: "<unknown>",
-				File:     "",
-				Line:     0,
-			}
-		}
-		file, line := f.FileLine(f.Entry())
-		return exception.StackFrame{
-			Function: f.Name(),
-			File:     file,
-			Line:     line,
-		}
-	default:
-		return exception.StackFrame{
-			Function: "<invalid>",
-			File:     "",
-			Line:     0,
-		}
+	return exception.StackFrame{
+		Function: "<unknown>",
+		File:     "",
+		Line:     0,
 	}
 }
 

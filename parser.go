@@ -43,9 +43,8 @@ type RequestHandler[Request any] = func(ctx context.Context, request Request) (R
 //     type [Header], and only one field with this tag is allowed per struct.
 //
 //   - `cookie`: If the tag value is not empty, the tag value must match the cookie
-//     name, and the field must be of type *[Cookie]. If the tag value is empty, the
-//     field must be of type []*[Cookie], and only one field with this tag is allowed
-//     per struct.
+//     name. If the tag value is empty, the field must be of type [KeyValues], and
+//     only one field with this tag is allowed per struct.
 //
 //   - `query`: If the tag value is not empty, the tag value must match the query
 //     parameter name. If the tag value is empty, the field must be of type
@@ -82,39 +81,13 @@ func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFun
 	}
 }
 
-type MiddlewareNext = func(ctx context.Context) (Response, error)
-type MiddlewareHandler[Request any] = func(ctx context.Context, request Request, next MiddlewareNext) (Response, error)
-
-func MiddlewareParser[Request any](handler MiddlewareHandler[Request]) Middleware {
-	tags := createTags(reflect.TypeFor[Request]())
-	return func(next Handler) Handler {
-		nextFunc := func(ctx context.Context) (Response, error) {
-			data := contextData(ctx)
-			next.ServeHTTP(data.writer, data.request)
-			return data.response, data.err
-		}
-		return HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			var parsed Request
-			requestHandler(writer, request, &tags, &parsed, func(ctx context.Context) (Response, error) {
-				return handler(ctx, parsed, nextFunc)
-			})
-		})
-	}
-}
-
 var requestValidator = validator.New(validator.WithRequiredStructEnabled())
 
 func requestHandler(
 	writer http.ResponseWriter, request *http.Request, tags *requestTags,
 	parsed any, handler func(ctx context.Context) (Response, error),
 ) {
-	// get context and context data
 	logger := ctrl.Logger(request.Context())
-	data, first := contextData(logger), false
-	if data == nil {
-		logger, data = newContext(logger, writer, request)
-		first = true
-	}
 	// parse request
 	if status, err := tags.parse(request, reflect.ValueOf(parsed).Elem()); err != nil {
 		logger.Error().Err(err).Msg("Failed to parse request")
@@ -136,17 +109,11 @@ func requestHandler(
 			response = Response{status: StatusInternalServerError}
 		}
 	} else {
-		logger.Debug().Any("response", response).Bool("first", first).Msg("Response returned")
+		logger.Debug().Any("response", response).Msg("Response returned")
 	}
-	// write response if first in stack
-	if first {
-		if err := response.write(writer); err != nil {
-			logger.Error().Err(err).Msg("Failed to write response")
-		} else {
-			logger.Debug().Msg("Response written")
-		}
-	} else {
-		data.response, data.err = response, err
+	// write response
+	if err := response.write(writer); err != nil {
+		logger.Error().Err(err).Msg("Failed to write response")
 	}
 }
 
@@ -156,7 +123,6 @@ type requestTags struct {
 	flags               uint
 	headerFieldIndex    []int
 	cookieFieldIndex    []int
-	cookiesFieldMap     map[string][][]int
 	queryFieldIndex     []int
 	urlFieldIndex       []int
 	formFieldIndex      []int
@@ -245,19 +211,12 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type) {
 				if tags.cookieFieldIndex != nil {
 					panic("BUG: multiple `cookie` tag fields are not allowed when empty `cookie` tag is present")
 				}
-				if field.Type != reflect.TypeFor[*Cookie]() {
-					panic("BUG: `cookie` tag field must be a `*http.Cookie`")
-				}
-				if tags.cookiesFieldMap == nil {
-					tags.cookiesFieldMap = map[string][][]int{}
-				}
-				tags.cookiesFieldMap[value] = append(tags.cookiesFieldMap[value], field.Index)
 			} else {
 				if tags.flags&tagCookie != 0 {
 					panic("BUG: multiple `cookie` tag fields are not allowed when empty `cookie` tag is present")
 				}
-				if field.Type != reflect.TypeFor[[]*Cookie]() {
-					panic("BUG: empty `cookie` tag field must be a `[]*http.Cookie`")
+				if field.Type != reflect.TypeFor[KeyValues]() {
+					panic("BUG: empty `cookie` tag field must be a `http.KeyValues`")
 				}
 				tags.cookieFieldIndex = field.Index
 			}
@@ -448,26 +407,18 @@ func (tags *requestTags) bindHeader(request *http.Request, parsed reflect.Value)
 }
 
 func (tags *requestTags) bindCookie(request *http.Request, parsed reflect.Value) (Status, error) {
-	// parse and bind cookies
+	// check if any cookies
 	if cookies := request.Cookies(); len(cookies) > 0 {
+		// convert cookies into key-values
+		keyValues := make(KeyValues, len(cookies))
+		for _, cookie := range cookies {
+			keyValues[cookie.Name] = append(keyValues[cookie.Name], cookie.Value)
+		}
+		// parse and bind cookies
 		if tags.cookieFieldIndex != nil {
-			for _, cookie := range cookies {
-				if err := cookie.Valid(); err != nil {
-					return StatusBadRequest, exception.String("HttpServer: Invalid cookie").AddCause(err)
-				}
-			}
-			parsed.FieldByIndex(tags.cookieFieldIndex).Set(reflect.ValueOf(cookies))
-		} else {
-			for _, cookie := range cookies {
-				if fields, exists := tags.cookiesFieldMap[cookie.Name]; exists {
-					if err := cookie.Valid(); err != nil {
-						return StatusBadRequest, exception.String("HttpServer: Invalid cookie").AddCause(err)
-					}
-					for _, field := range fields {
-						parsed.FieldByIndex(field).Set(reflect.ValueOf(cookie))
-					}
-				}
-			}
+			parsed.FieldByIndex(tags.cookieFieldIndex).Set(reflect.ValueOf(keyValues))
+		} else if err := bind("cookie", keyValues, parsed); err != nil {
+			return StatusBadRequest, exception.String("HttpServer: Bind cookies failed").AddCause(err)
 		}
 	}
 	return 0, nil
@@ -486,17 +437,21 @@ func (tags *requestTags) bindQuery(request *http.Request, parsed reflect.Value) 
 }
 
 func (tags *requestTags) bindUrl(request *http.Request, parsed reflect.Value) (Status, error) {
-	// parse and bind url parameters
-	routeContext := chi.RouteContext(request.Context())
-	if len(routeContext.URLParams.Keys) > 0 {
-		urlParams := map[string]string{}
-		for index, key := range routeContext.URLParams.Keys {
-			urlParams[key] = routeContext.URLParams.Values[index]
-		}
-		if tags.urlFieldIndex != nil {
-			parsed.FieldByIndex(tags.urlFieldIndex).Set(reflect.ValueOf(urlParams))
-		} else if err := bind("url", urlParams, parsed); err != nil {
-			return StatusBadRequest, exception.String("HttpServer: Bind url params failed").AddCause(err)
+	// get route context from chi router
+	if routeContext := chi.RouteContext(request.Context()); routeContext != nil {
+		// check if there is any url params
+		if urlParams := &routeContext.URLParams; len(urlParams.Keys) > 0 {
+			// convert url params into key-value
+			keyValue := make(KeyValue, len(urlParams.Keys))
+			for index, key := range urlParams.Keys {
+				keyValue[key] = urlParams.Values[index]
+			}
+			// parse and bind url parameters
+			if tags.urlFieldIndex != nil {
+				parsed.FieldByIndex(tags.urlFieldIndex).Set(reflect.ValueOf(keyValue))
+			} else if err := bind("url", keyValue, parsed); err != nil {
+				return StatusBadRequest, exception.String("HttpServer: Bind url params failed").AddCause(err)
+			}
 		}
 	}
 	return 0, nil
@@ -548,7 +503,7 @@ func (tags *requestTags) bindBody(request *http.Request, parsed reflect.Value) {
 }
 
 func bind(tag string, input any, output reflect.Value) error {
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+	if decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		DecodeHook:           internalDecodeHookFunc,
 		WeaklyTypedInput:     true,
 		Squash:               true,
@@ -556,11 +511,9 @@ func bind(tag string, input any, output reflect.Value) error {
 		TagName:              tag,
 		SquashTagOption:      string([]byte{0xFF, 0xFF, 0xFF, 0xFF}), // No squash tag
 		IgnoreUntaggedFields: true,
-	})
-	if err != nil {
+	}); err != nil {
 		return exception.String("HttpServer: Create decoder failed").AddCause(err)
-	}
-	if err := decoder.Decode(input); err != nil {
+	} else if err := decoder.Decode(input); err != nil {
 		return exception.String("Decode failed").AddCause(err)
 	}
 	return nil
