@@ -185,7 +185,7 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type) {
 			if field.Type.Kind() != reflect.Struct {
 				panic("BUG: anonymous field must be a struct")
 			}
-			tags.checkRecursively(requestType)
+			tags.checkRecursively(field.Type)
 			continue
 		}
 		// process header tag
