@@ -26,7 +26,7 @@ import (
 	"github.com/thanhminhmr/go-exception"
 )
 
-type RequestHandler[Request any] = func(ctx context.Context, request Request) (Response, error)
+type RequestHandler[Request any] = func(ctx context.Context, request Request) (Response, bool)
 
 // RequestParser parses an HTTP request and populates a struct using field tags
 // to map request data to struct fields.
@@ -58,10 +58,11 @@ type RequestHandler[Request any] = func(ctx context.Context, request Request) (R
 //     parameter name. If the tag value is empty, the field must be of type
 //     [KeyValues], and only one field with this tag is allowed per struct.
 //
-//   - `json`: The tag value must be empty. Only one field with this tag
-//     is allowed per struct. The request body is unmarshalled into this field using
-//     `encoding/json`. Any type validation is handled by the JSON unmarshalling
-//     process.
+//   - `json`: If the tag value is empty, the request body is unmarshalled into
+//     this field using `encoding/json`, and only one field with this tag is allowed
+//     per struct. In this case, any type validation is handled by the JSON
+//     unmarshalling process. If the tag value is not empty, then the JSON body must
+//     be an object, and the tag value must match the JSON object field name.
 //
 //   - `multipart`: The tag value must be empty. Only one field with this tag
 //     is allowed per struct. The field must be of type [*multipart.Reader].
@@ -75,7 +76,7 @@ func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFun
 	tags := createTags(reflect.TypeFor[Request]())
 	return func(writer http.ResponseWriter, request *http.Request) {
 		var parsed Request
-		requestHandler(writer, request, &tags, &parsed, func(ctx context.Context) (Response, error) {
+		requestHandler(writer, request, &tags, &parsed, func(ctx context.Context) (Response, bool) {
 			return handler(ctx, parsed)
 		})
 	}
@@ -85,7 +86,7 @@ var requestValidator = validator.New(validator.WithRequiredStructEnabled())
 
 func requestHandler(
 	writer http.ResponseWriter, request *http.Request, tags *requestTags,
-	parsed any, handler func(ctx context.Context) (Response, error),
+	parsed any, handler func(ctx context.Context) (Response, bool),
 ) {
 	logger := newContext(ctrl.Logger(request.Context()), writer)
 	// parse request
@@ -101,17 +102,14 @@ func requestHandler(
 		return
 	}
 	logger.Debug().Any("parsed", parsed).Msg("Request parsed")
-	// call handler and log response
-	response, err := handler(logger)
-	if err != nil {
-		logger.Error().Err(err).Msg("Handler returned with error")
-		if response.status == 0 {
-			response = Response{status: StatusInternalServerError}
-		}
-	} else {
-		logger.Debug().Any("response", response).Msg("Response returned")
+	// call handler and log error if any
+	response, ok := handler(logger)
+	if !ok {
+		logger.Error().Msg("Handler failed")
+		response = Response{status: StatusInternalServerError}
 	}
-	// write response
+	// log and write response
+	logger.Debug().Any("response", response).Msg("Handler returned")
 	if err := response.write(writer); err != nil {
 		logger.Error().Err(err).Msg("Failed to write response")
 	}
@@ -276,13 +274,16 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type) {
 		// process json tag
 		if value, exists := field.Tag.Lookup("json"); exists {
 			if value != "" {
-				panic("BUG: `json` tag value must be empty")
+				if tags.jsonFieldIndex != nil {
+					panic("BUG: multiple `json` tag fields are not allowed when empty `json` tag is present")
+				}
+			} else {
+				if tags.flags&tagJson != 0 {
+					panic("BUG: multiple `json` tag fields are not allowed when empty `json` tag is present")
+				}
+				tags.jsonFieldIndex = field.Index
 			}
-			if tags.flags&tagJson != 0 {
-				panic("BUG: multiple `json` tag fields are not allowed")
-			}
-			tags.flags = tags.flags | tagJson
-			tags.jsonFieldIndex = field.Index
+			tags.flags = tags.flags | tagForm
 		}
 		// process multipart tag
 		if value, exists := field.Tag.Lookup("multipart"); exists {
@@ -478,10 +479,23 @@ func (tags *requestTags) bindForm(reader io.Reader, parsed reflect.Value) (Statu
 }
 
 func (tags *requestTags) bindJson(reader io.Reader, parsed reflect.Value) (Status, error) {
-	// decode the whole body to the JSON field
-	jsonField := parsed.FieldByIndex(tags.jsonFieldIndex).Addr().Interface()
-	if err := json.NewDecoder(reader).Decode(jsonField); err != nil {
+	// check if decode the whole body to the JSON field
+	var target any
+	var values map[string]any
+	if tags.jsonFieldIndex != nil {
+		target = parsed.FieldByIndex(tags.jsonFieldIndex).Addr().Interface()
+	} else {
+		target = &values
+	}
+	// shared json decoder path
+	if err := json.NewDecoder(reader).Decode(target); err != nil {
 		return StatusBadRequest, exception.String("HttpServer: Decode JSON body failed").AddCause(err)
+	}
+	// bind json body
+	if tags.jsonFieldIndex == nil {
+		if err := bind("json", values, parsed); err != nil {
+			return StatusBadRequest, exception.String("HttpServer: Bind json values failed").AddCause(err)
+		}
 	}
 	return 0, nil
 }
