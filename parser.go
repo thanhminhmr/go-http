@@ -9,6 +9,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -18,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
@@ -76,6 +78,9 @@ func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFun
 	tags := createTags(reflect.TypeFor[Request]())
 	return func(writer http.ResponseWriter, request *http.Request) {
 		var parsed Request
+		if tags.defaultStruct != nil {
+			parsed = *(*Request)(tags.defaultStruct)
+		}
 		requestHandler(writer, request, &tags, &parsed, func(ctx context.Context) (Response, bool) {
 			return handler(ctx, parsed)
 		})
@@ -120,6 +125,7 @@ func requestHandler(
 
 type requestTags struct {
 	flags               uint
+	defaultStruct       unsafe.Pointer
 	headerFieldIndex    []int
 	cookieFieldIndex    []int
 	queryFieldIndex     []int
@@ -158,21 +164,22 @@ func createTags(requestType reflect.Type) requestTags {
 	if exists {
 		return tags
 	}
-	tags.checkRecursively(requestType)
-	if tags.flags&tagForm != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsForm) {
-		panic("BUG: `form` tag field is not allowed when `body` tag contains " + contentTypeIsForm)
-	}
-	if tags.flags&tagJson != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsJson) {
-		panic("BUG: `json` tag field is not allowed when `body` tag contains " + contentTypeIsJson)
-	}
-	if tags.flags&tagMultipart != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsMultipart) {
-		panic("BUG: `multipart` tag field is not allowed when `body` tag contains " + contentTypeIsMultipart)
+	requestValue := reflect.New(requestType).Elem()
+	tags.checkRecursively(requestType, requestValue)
+	if len(tags.bodyContentTypes) > 0 {
+		if tags.flags&tagForm != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsForm) {
+			panic("BUG: `form` tag field is not allowed when `body` tag contains " + contentTypeIsForm)
+		} else if tags.flags&tagJson != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsJson) {
+			panic("BUG: `json` tag field is not allowed when `body` tag contains " + contentTypeIsJson)
+		} else if tags.flags&tagMultipart != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsMultipart) {
+			panic("BUG: `multipart` tag field is not allowed when `body` tag contains " + contentTypeIsMultipart)
+		}
 	}
 	globalTags[requestType] = tags
 	return tags
 }
 
-func (tags *requestTags) checkRecursively(requestType reflect.Type) {
+func (tags *requestTags) checkRecursively(requestType reflect.Type, requestValue reflect.Value) {
 	for index := range requestType.NumField() {
 		field := requestType.Field(index)
 		// skip if field is not exported
@@ -184,8 +191,20 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type) {
 			if field.Type.Kind() != reflect.Struct {
 				panic("BUG: anonymous field must be a struct")
 			}
-			tags.checkRecursively(field.Type)
+			tags.checkRecursively(field.Type, requestValue)
 			continue
+		}
+		// process default tag
+		if value, exists := field.Tag.Lookup("default"); exists {
+			// mark as default struct available
+			if tags.defaultStruct == nil {
+				tags.defaultStruct = requestValue.Addr().UnsafePointer()
+			}
+			// decode value from default string
+			target := requestValue.FieldByIndex(field.Index).Addr().Interface()
+			if _, err := fmt.Sscan(value, target); err != nil {
+				panic("BUG: Cannot unmarshal default value: " + fmt.Sprint(err))
+			}
 		}
 		// process header tag
 		if value, exists := field.Tag.Lookup("header"); exists {
