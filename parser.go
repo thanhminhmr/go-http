@@ -107,9 +107,10 @@ func requestHandler(
 	if !ok {
 		logger.Error().Msg("Handler failed")
 		response = Response{status: StatusInternalServerError}
+	} else {
+		logger.Debug().Any("response", response).Msg("Handler returned")
 	}
-	// log and write response
-	logger.Debug().Any("response", response).Msg("Handler returned")
+	// write response
 	if err := response.write(writer); err != nil {
 		logger.Error().Err(err).Msg("Failed to write response")
 	}
