@@ -11,22 +11,23 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"reflect"
+	"unsafe"
 
 	"github.com/thanhminhmr/go-common/ctrl"
 	"github.com/thanhminhmr/go-exception"
 )
 
-func newContext(ctx *ctrl.LogCtx, writer http.ResponseWriter) *ctrl.LogCtx {
-	return ctx.WithValue(reflect.TypeFor[Response](), writer.Header())
+type Context struct {
+	ctx    context.Context
+	header http.Header
 }
 
-func NewResponse(ctx context.Context, status Status) Response {
-	if header, ok := ctx.Value(reflect.TypeFor[Response]()).(http.Header); !ok || header == nil {
-		panic("BUG: response header missing")
-	} else {
-		return Response{status: status, header: header}
-	}
+func (c Context) Response(status Status) *Response {
+	return &Response{status: status, header: c.header}
+}
+
+func (c Context) Ctx() context.Context {
+	return c.ctx
 }
 
 type Response struct {
@@ -43,32 +44,37 @@ func (r Response) Header() Header {
 	return r.header
 }
 
-func (r Response) Cookie(cookie http.Cookie) Response {
+func (r *Response) Cookie(cookie http.Cookie) *Response {
 	r.header.Add("Set-Cookie", cookie.String())
 	return r
 }
 
-func (r Response) BytesBody(body []byte) Response {
+func (r *Response) BytesBody(body []byte) *Response {
 	r.body = body
 	return r
 }
 
-func (r Response) StringBody(body string) Response {
+func (r *Response) StringBody(body string) *Response {
 	r.body = body
 	return r
 }
 
-func (r Response) StreamBody(body func(io.Writer) error) Response {
+func (r *Response) StreamBody(body func(io.Writer) error) *Response {
 	r.body = body
 	return r
 }
 
-func (r Response) OctetsBody(body []byte) Response {
+func (r *Response) PlainTextBody(body string) *Response {
+	r.body = plainTextBody{body: body}
+	return r
+}
+
+func (r *Response) OctetsBody(body []byte) *Response {
 	r.body = octetsBody{body: body}
 	return r
 }
 
-func (r Response) JsonBody(body any) Response {
+func (r *Response) JsonBody(body any) *Response {
 	r.body = jsonBody{body: body}
 	return r
 }
@@ -80,6 +86,8 @@ func (r Response) MarshalZerologObject(e *ctrl.LogEvent) {
 	}
 	if r.body != nil {
 		switch body := r.body.(type) {
+		case plainTextBody:
+			e.Str("body", body.body)
 		case octetsBody:
 			e.Bytes("body", body.body)
 		case jsonBody:
@@ -90,6 +98,7 @@ func (r Response) MarshalZerologObject(e *ctrl.LogEvent) {
 	}
 }
 
+type plainTextBody = struct{ body string }
 type octetsBody = struct{ body []byte }
 type jsonBody = struct{ body any }
 
@@ -109,16 +118,21 @@ func (r Response) write(writer http.ResponseWriter) error {
 	case func(io.Writer) error:
 		writer.WriteHeader(r.status)
 		return body(writer)
+	case plainTextBody:
+		r.header.Set("Content-Type", "text/plain; charset=utf-8")
+		writer.WriteHeader(r.status)
+		_, err := writer.Write(unsafe.Slice(unsafe.StringData(body.body), len(body.body)))
+		return err
 	case octetsBody:
 		r.header.Set("Content-Type", "application/octet-stream")
 		writer.WriteHeader(r.status)
 		_, err := writer.Write(body.body)
 		return err
 	case jsonBody:
-		r.header.Set("Content-Type", "application/json; charset=utf-8")
-		writer.WriteHeader(r.status)
 		data, err := json.Marshal(body.body)
 		if err == nil {
+			r.header.Set("Content-Type", "application/json; charset=utf-8")
+			writer.WriteHeader(r.status)
 			_, err = writer.Write(data)
 		}
 		return err

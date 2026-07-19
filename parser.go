@@ -7,7 +7,6 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,7 +27,7 @@ import (
 	"github.com/thanhminhmr/go-exception"
 )
 
-type RequestHandler[Request any] = func(ctx context.Context, request Request) (Response, bool)
+type RequestHandler[Request any] = func(ctx Context, request Request) *Response
 
 // RequestParser parses an HTTP request and populates a struct using field tags
 // to map request data to struct fields.
@@ -81,7 +80,7 @@ func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFun
 		if tags.defaultStruct != nil {
 			parsed = *(*Request)(tags.defaultStruct)
 		}
-		requestHandler(writer, request, &tags, &parsed, func(ctx context.Context) (Response, bool) {
+		requestHandler(writer, request, &tags, &parsed, func(ctx Context) *Response {
 			return handler(ctx, parsed)
 		})
 	}
@@ -91,9 +90,9 @@ var requestValidator = validator.New(validator.WithRequiredStructEnabled())
 
 func requestHandler(
 	writer http.ResponseWriter, request *http.Request, tags *requestTags,
-	parsed any, handler func(ctx context.Context) (Response, bool),
+	parsed any, handler func(ctx Context) *Response,
 ) {
-	logger := newContext(ctrl.Logger(request.Context()), writer)
+	logger := ctrl.Logger(request.Context())
 	// parse request
 	if status, err := tags.parse(request, reflect.ValueOf(parsed).Elem()); err != nil {
 		logger.Error().Err(err).Msg("Failed to parse request")
@@ -108,10 +107,10 @@ func requestHandler(
 	}
 	logger.Debug().Any("parsed", parsed).Msg("Request parsed")
 	// call handler and log error if any
-	response, ok := handler(logger)
-	if !ok {
+	response := handler(Context{ctx: logger, header: writer.Header()})
+	if response == nil {
 		logger.Error().Msg("Handler failed")
-		response = Response{status: StatusInternalServerError}
+		response = &Response{status: StatusInternalServerError}
 	} else {
 		logger.Debug().Any("response", response).Msg("Handler returned")
 	}
@@ -509,7 +508,7 @@ func (tags *requestTags) bindJson(reader io.Reader, parsed reflect.Value) (Statu
 	}
 	// shared json decoder path
 	if err := json.NewDecoder(reader).Decode(target); err != nil {
-		return StatusBadRequest, exception.String("HttpServer: Decode JSON body failed").AddCause(err)
+		return StatusBadRequest, exception.String("HttpServer: Decode json body failed").AddCause(err)
 	}
 	// bind json body
 	if tags.jsonFieldIndex == nil {
