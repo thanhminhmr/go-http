@@ -107,7 +107,7 @@ func requestHandler(
 	}
 	logger.Debug().Any("parsed", parsed).Msg("Request parsed")
 	// call handler and log error if any
-	response := handler(Context{ctx: logger, header: writer.Header()})
+	response := handler(Context{Ctx: logger, header: writer.Header()})
 	if response == nil {
 		logger.Error().Msg("Handler failed")
 		response = &Response{status: StatusInternalServerError}

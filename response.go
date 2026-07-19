@@ -18,16 +18,12 @@ import (
 )
 
 type Context struct {
-	ctx    context.Context
+	Ctx    context.Context
 	header http.Header
 }
 
 func (c Context) Response(status Status) *Response {
 	return &Response{status: status, header: c.header}
-}
-
-func (c Context) Ctx() context.Context {
-	return c.ctx
 }
 
 type Response struct {
