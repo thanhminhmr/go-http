@@ -4,33 +4,37 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-package http
+package httpserver
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog"
 	"github.com/thanhminhmr/go-common/ctrl"
 	"github.com/thanhminhmr/go-exception"
 )
 
 type ServerConfig struct {
-	Port              uint16 `env:"HTTP_SERVER_PORT" validate:"required"`
-	ReadHeaderTimeout int    `env:"HTTP_SERVER_READ_HEADER_TIMEOUT" validate:"min=0,max=60" default:"5"`
-	IdleTimeout       int    `env:"HTTP_SERVER_IDLE_TIMEOUT" validate:"min=0,max=3600" default:"60"`
-	MaxHeaderBytes    int    `env:"HTTP_SERVER_MAX_HEADER_BYTES" validate:"min=0,max=65536" default:"4096"`
-	ShutdownOnError   bool   `env:"HTTP_SERVER_SHUTDOWN_ON_ERROR" default:"true"`
+	Port              uint16 `cfg:"port" validate:"required" default:"8080"`
+	ReadHeaderTimeout int    `cfg:"read_header_timeout" validate:"min=1,max=60" default:"5"`
+	IdleTimeout       int    `cfg:"idle_timeout" validate:"min=1,max=3600" default:"60"`
+	MaxHeaderBytes    int    `cfg:"max_header_bytes" validate:"min=0,max=65536" default:"4096"`
+	ShutdownOnError   bool   `cfg:"shutdown_on_error" default:"true"`
 }
 
 func NewServer(config *ServerConfig) *chi.Mux {
 	// create route
 	router := chi.NewRouter()
+	// set a sane default middleware stack
+	router.Use(requestLogger)
 	// start the server
 	ctrl.Register(func(ctx context.Context) (ctrl.Runner, ctrl.Cleaner) {
 		// create the http server
@@ -38,15 +42,13 @@ func NewServer(config *ServerConfig) *chi.Mux {
 			config: config,
 			router: router,
 			server: http.Server{
-				Addr:              string(strconv.AppendUint([]byte{':'}, uint64(config.Port), 10)),
+				Addr:              fmt.Sprintf(":%d", config.Port),
 				Handler:           router,
 				ReadHeaderTimeout: time.Duration(config.ReadHeaderTimeout) * time.Second,
 				IdleTimeout:       time.Duration(config.IdleTimeout) * time.Second,
 				MaxHeaderBytes:    config.MaxHeaderBytes,
 			},
 		}
-		// set a sane default middleware stack
-		router.Use(requestLogger)
 		// return the runner and the cleaner
 		return server.runner, server.cleaner
 	})
@@ -61,10 +63,10 @@ type httpServer struct {
 }
 
 func (s *httpServer) runner(ctx context.Context, shutdown context.CancelFunc) {
-	logger := ctrl.Logger(ctx)
+	logger := zerolog.Ctx(ctx)
 	// dump all routes
 	logger.Info().Msg("Listing all routes...")
-	if err := chi.Walk(s.router, func(method string, route string, handler Handler, middlewares ...Middleware) error {
+	if err := chi.Walk(s.router, func(method string, route string, handler http.Handler, middlewares ...Middleware) error {
 		logger.Info().Str("method", method).Str("route", route).
 			Object("handler", funcObject(handler)).
 			Array("middlewares", funcObjects(middlewares)).
@@ -86,7 +88,7 @@ func (s *httpServer) runner(ctx context.Context, shutdown context.CancelFunc) {
 }
 
 func (s *httpServer) cleaner(ctx context.Context) {
-	logger := ctrl.Logger(ctx)
+	logger := zerolog.Ctx(ctx)
 	logger.Info().Msg("Shutting down...")
 	if err := s.server.Shutdown(ctx); err != nil {
 		logger.Error().Err(err).Msg("Error while shutting down")
@@ -94,9 +96,10 @@ func (s *httpServer) cleaner(ctx context.Context) {
 	logger.Info().Msg("Shutdown complete")
 }
 
-func requestLogger(next Handler) Handler {
-	return HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		logger := ctrl.Logger(request.Context()).With().Str("request_id", rand.Text()).Logger()
+func requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		logger := zerolog.Ctx(request.Context()).With().
+			Str("request_id", strconv.FormatUint(rand.Uint64(), 36)).Logger()
 		// log request and response
 		logger.Info().Str("method", request.Method).Str("url", request.URL.String()).Msg("Request")
 		start := time.Now()
@@ -112,11 +115,11 @@ func requestLogger(next Handler) Handler {
 		defer exception.Recover(func(recovered exception.Exception) {
 			logger.Error().Any("recovered", recovered).Msg("Recovered from panic")
 			// response with 500 Internal Server Error
-			if request.Header.Get("Connection") != "Upgrade" {
+			if wrappedWriter.Status() == 0 {
 				wrappedWriter.WriteHeader(http.StatusInternalServerError)
 			}
 		})
 		// call the next handler
-		next.ServeHTTP(wrappedWriter, request.WithContext(&logger))
+		next.ServeHTTP(wrappedWriter, request.WithContext(logger.WithContext(request.Context())))
 	})
 }

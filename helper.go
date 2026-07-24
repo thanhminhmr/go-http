@@ -4,11 +4,12 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-package http
+package httpserver
 
 import (
 	"bufio"
 	"io"
+	"unsafe"
 
 	"github.com/thanhminhmr/go-exception"
 	"golang.org/x/net/html/charset"
@@ -34,6 +35,10 @@ func funcObjects[S ~[]E, E any](values S) exception.StackFrames {
 		frames = append(frames, funcObject(value))
 	}
 	return frames
+}
+
+func unsafeStringToBytes(value string) []byte {
+	return unsafe.Slice(unsafe.StringData(value), len(value))
 }
 
 var unicodeUTF16LE = unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM)

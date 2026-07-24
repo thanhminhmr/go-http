@@ -4,16 +4,15 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-package http
+package httpserver
 
 import (
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
-	"unsafe"
 
-	"github.com/thanhminhmr/go-common/ctrl"
+	"github.com/rs/zerolog"
 	"github.com/thanhminhmr/go-exception"
 )
 
@@ -22,21 +21,21 @@ type Context struct {
 	header http.Header
 }
 
-func (c Context) Response(status Status) *Response {
+func (c Context) Response(status int) *Response {
 	return &Response{status: status, header: c.header}
 }
 
 type Response struct {
-	status Status
-	header Header
+	status int
+	header http.Header
 	body   any
 }
 
-func (r Response) Status() Status {
+func (r Response) Status() int {
 	return r.status
 }
 
-func (r Response) Header() Header {
+func (r Response) Header() http.Header {
 	return r.header
 }
 
@@ -75,7 +74,7 @@ func (r *Response) JsonBody(body any) *Response {
 	return r
 }
 
-func (r Response) MarshalZerologObject(e *ctrl.LogEvent) {
+func (r Response) MarshalZerologObject(e *zerolog.Event) {
 	e.Int("status", r.status)
 	if len(r.header) > 0 {
 		e.Any("header", r.header)
@@ -109,7 +108,7 @@ func (r Response) write(writer http.ResponseWriter) error {
 		return err
 	case string:
 		writer.WriteHeader(r.status)
-		_, err := writer.Write([]byte(body))
+		_, err := writer.Write(unsafeStringToBytes(body))
 		return err
 	case func(io.Writer) error:
 		writer.WriteHeader(r.status)
@@ -117,7 +116,7 @@ func (r Response) write(writer http.ResponseWriter) error {
 	case plainTextBody:
 		r.header.Set("Content-Type", "text/plain; charset=utf-8")
 		writer.WriteHeader(r.status)
-		_, err := writer.Write(unsafe.Slice(unsafe.StringData(body.body), len(body.body)))
+		_, err := writer.Write(unsafeStringToBytes(body.body))
 		return err
 	case octetsBody:
 		r.header.Set("Content-Type", "application/octet-stream")
@@ -130,8 +129,11 @@ func (r Response) write(writer http.ResponseWriter) error {
 			r.header.Set("Content-Type", "application/json; charset=utf-8")
 			writer.WriteHeader(r.status)
 			_, err = writer.Write(data)
+		} else {
+			writer.WriteHeader(http.StatusInternalServerError)
 		}
 		return err
 	}
+	writer.WriteHeader(http.StatusInternalServerError)
 	return exception.String("Response: unsupported body type")
 }
