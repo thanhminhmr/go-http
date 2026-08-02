@@ -8,7 +8,12 @@ package httpserver
 
 import "net/http"
 
+// Middleware is a function that wraps an [http.Handler] to intercept or modify
+// the handling of an HTTP request.
 type Middleware = func(http.Handler) http.Handler
 
+// KeyValue maps a string key to a single string value.
 type KeyValue = map[string]string
+
+// KeyValues maps a string key to a list of string values.
 type KeyValues = map[string][]string

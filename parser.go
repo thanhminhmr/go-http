@@ -29,6 +29,10 @@ import (
 	"github.com/thanhminhmr/go-exception"
 )
 
+// RequestHandler is a handler function invoked by [RequestParser] after the
+// request has been parsed and validated. It receives the request [Context] and
+// the populated Request value, and returns a [*Response] to send to the client.
+// Returning nil signals a handler failure; the server responds with 500.
 type RequestHandler[Request any] = func(ctx Context, request Request) *Response
 
 // RequestParser parses an HTTP request and populates a struct using field tags

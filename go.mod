@@ -8,7 +8,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.11.1
-	github.com/thanhminhmr/go-common v0.0.52
+	github.com/thanhminhmr/go-common v0.0.53
 	github.com/thanhminhmr/go-exception v0.0.16
 	golang.org/x/net v0.57.0
 	golang.org/x/text v0.40.0

@@ -22,6 +22,8 @@ import (
 	"github.com/thanhminhmr/go-exception"
 )
 
+// ServerConfig holds the configuration for an HTTP server. Field tags are
+// honored by github.com/go-viper/mapstructure and github.com/go-playground/validator.
 type ServerConfig struct {
 	Port              uint16 `cfg:"port" validate:"required" default:"8080"`
 	ReadHeaderTimeout int    `cfg:"read_header_timeout" validate:"min=1,max=60" default:"5"`
@@ -30,13 +32,16 @@ type ServerConfig struct {
 	ShutdownOnError   bool   `cfg:"shutdown_on_error" default:"true"`
 }
 
+// NewServer creates a new HTTP server from config and returns its router for
+// route registration. The server is started and shut down automatically by the
+// application lifecycle. A default request logger middleware is installed.
 func NewServer(config *ServerConfig) *chi.Mux {
 	// create route
 	router := chi.NewRouter()
 	// set a sane default middleware stack
 	router.Use(requestLogger)
 	// start the server
-	ctrl.Register(func(ctx context.Context) (ctrl.Runner, ctrl.Cleaner) {
+	ctrl.Register(func(ctx, _ context.Context) (ctrl.Runner, ctrl.Cleaner) {
 		// create the http server
 		server := httpServer{
 			config: config,
