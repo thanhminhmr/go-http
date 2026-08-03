@@ -14,6 +14,9 @@ import (
 	"testing"
 )
 
+// Tests for concurrent request handling: parallel requests through both the
+// standard handler and the chi router.
+
 func TestConcurrency_ParallelRequests(t *testing.T) {
 	type Req struct {
 		Name string `query:"name" validate:"required"`

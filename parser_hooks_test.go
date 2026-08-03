@@ -19,8 +19,7 @@ import (
 
 // Test the decode hook behavior for TextUnmarshaler types and type conversions.
 //
-// The parser uses a single decode hook: internalDecodeHookFunc (parser.go).
-// It handles:
+// Binding goes through common.BindStructWithTag, whose decode hook handles:
 //  1. Same-type: direct Set
 //  2. Pure-slice detection (NumMethod == 0): short-circuit, wrap, or unbox
 //  3. mapstructure.Unmarshaler: delegate to target
@@ -139,11 +138,14 @@ func TestHook_NetipPrefix_QueryTag(t *testing.T) {
 	assert.Equal(t, expected, captured.request.P, "P")
 }
 
-// ============ net.IP (slice kind — see parser_bug_test.go Bug 3) ============
+// ============ net.IP (slice kind, TextUnmarshaler) ============
 //
-// net.IP is type IP []byte, which has Kind == Slice. It implements TextUnmarshaler
-// and works with all tags (url, query, header, cookie, form) after the pure-slice
-// detection fix. See parser_bug_test.go Bug 3 for regression tests.
+// net.IP is `type IP []byte` — Kind == Slice, but it implements TextUnmarshaler
+// (via pointer receiver). The pure-slice detection in the common package's decode
+// hook checks `target.NumMethod() == 0` to distinguish plain slices (like []byte,
+// []string) from named slice types (like net.IP) that have methods. This allows
+// net.IP to be unboxed from a single-element []string and then handled by
+// TextUnmarshaler, working with all tag types.
 
 func TestHook_NetIP_UrlTag(t *testing.T) {
 	type Req struct {
@@ -154,6 +156,69 @@ func TestHook_NetIP_UrlTag(t *testing.T) {
 		captureHandler[Req])
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, net.IPv4(192, 168, 1, 1), captured.request.IP, "IP")
+}
+
+func TestHook_NetIP_QueryTag(t *testing.T) {
+	type Req struct {
+		IP net.IP `query:"ip"`
+	}
+	captured, rec := doRequest[Req](t, captureHandler[Req], http.MethodGet, "/",
+		withQuery("ip=192.168.1.1"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, net.IPv4(192, 168, 1, 1), captured.request.IP, "IP")
+}
+
+func TestHook_NetIP_HeaderTag(t *testing.T) {
+	type Req struct {
+		IP net.IP `header:"Ip"`
+	}
+	captured, rec := doRequest[Req](t, captureHandler[Req], http.MethodGet, "/",
+		withHeader("Ip", "192.168.1.1"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, net.IPv4(192, 168, 1, 1), captured.request.IP, "IP")
+}
+
+func TestHook_NetIP_CookieTag(t *testing.T) {
+	type Req struct {
+		IP net.IP `cookie:"ip"`
+	}
+	captured, rec := doRequest[Req](t, captureHandler[Req], http.MethodGet, "/",
+		withCookie("ip", "192.168.1.1"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, net.IPv4(192, 168, 1, 1), captured.request.IP, "IP")
+}
+
+func TestHook_NetIP_FormTag(t *testing.T) {
+	type Req struct {
+		IP net.IP `form:"ip"`
+	}
+	captured, rec := doRequest[Req](t, captureHandler[Req], http.MethodPost, "/",
+		withFormBody(url.Values{"ip": {"192.168.1.1"}}))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, net.IPv4(192, 168, 1, 1), captured.request.IP, "IP")
+}
+
+// Invalid IP should return 400 — TextUnmarshaler rejects the invalid input.
+func TestHook_NetIP_Invalid(t *testing.T) {
+	type Req struct {
+		IP net.IP `query:"ip"`
+	}
+	_, rec := doRequest[Req](t, captureHandler[Req], http.MethodGet, "/",
+		withQuery("ip=not-an-ip"))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// *net.IP (pointer): unbox fires (Ptr != Slice), works as a contrast to net.IP.
+func TestHook_NetIPPointer_QueryTag(t *testing.T) {
+	type Req struct {
+		IP *net.IP `query:"ip"`
+	}
+	captured, rec := doRequest[Req](t, captureHandler[Req], http.MethodGet, "/",
+		withQuery("ip=192.168.1.1"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	if assert.NotNil(t, captured.request.IP, "IP") {
+		assert.Equal(t, net.IPv4(192, 168, 1, 1), *captured.request.IP, "IP")
+	}
 }
 
 // ============ Custom TextUnmarshaler type ============
@@ -229,7 +294,7 @@ func TestHook_ComplexNumber_QueryTag(t *testing.T) {
 		withQuery("c64=1%2B2i&c128=3%2B4i"))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, complex64(1+2i), captured.request.C64, "C64")
-	assert.Equal(t, complex128(3+4i), captured.request.C128, "C128")
+	assert.Equal(t, 3+4i, captured.request.C128, "C128")
 }
 
 func TestHook_ComplexNumber_Invalid(t *testing.T) {
@@ -306,4 +371,23 @@ func TestHook_TargetPureSlice_Wrapping(t *testing.T) {
 		withRawBody("application/json", []byte(`{"values":42}`)))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, []int{42}, captured.request.Values, "Values")
+}
+
+// ============ json.Number intermediate values (from decoder.UseNumber) ============
+//
+// When using a non-empty json:"fieldname" tag with a numeric field (int, float,
+// etc.), the JSON body is decoded into map[string]any using decoder.UseNumber()
+// (parser.go), which produces json.Number values for JSON numbers. These values
+// are then passed to common.BindStructWithTag, whose decode hook handles
+// json.Number alongside string.
+
+func TestHook_JSONNumber_JsonTag(t *testing.T) {
+	type Req struct {
+		Count int `json:"count"`
+	}
+	captured, rec := doRequest[Req](t, captureHandler[Req],
+		http.MethodPost, "/", withRawBody("application/json",
+			[]byte(`{"count":42}`)))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 42, captured.request.Count, "Count")
 }

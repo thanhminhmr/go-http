@@ -14,7 +14,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// Tests for the simple request tags: default, header, cookie, query, and url.
+// Body-reading tags (form, json, multipart, body) are in parser_body_tags_test.go.
 
 // ============ default tag tests ============
 
@@ -69,13 +73,10 @@ type defaultInvalidStruct struct {
 	Age int `default:"not-a-number"`
 }
 
-func TestDefaultTag_InvalidValue_PanicsAtRegistration(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for invalid default value, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[defaultInvalidStruct])
+func TestDefaultTag_InvalidValue_Panics(t *testing.T) {
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[defaultInvalidStruct])
+	})
 }
 
 // ============ default tag: string-specific tests ============
@@ -149,12 +150,9 @@ type defaultInvalidIntFormat struct {
 }
 
 func TestDefaultTag_InvalidIntFormat_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for invalid integer format, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[defaultInvalidIntFormat])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[defaultInvalidIntFormat])
+	})
 }
 
 type defaultInvalidBoolFormat struct {
@@ -162,12 +160,9 @@ type defaultInvalidBoolFormat struct {
 }
 
 func TestDefaultTag_InvalidBoolFormat_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for invalid bool format, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[defaultInvalidBoolFormat])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[defaultInvalidBoolFormat])
+	})
 }
 
 type defaultInvalidUintStruct struct {
@@ -175,12 +170,9 @@ type defaultInvalidUintStruct struct {
 }
 
 func TestDefaultTag_InvalidUint_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for invalid uint default, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[defaultInvalidUintStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[defaultInvalidUintStruct])
+	})
 }
 
 type defaultInvalidFloatStruct struct {
@@ -188,12 +180,9 @@ type defaultInvalidFloatStruct struct {
 }
 
 func TestDefaultTag_InvalidFloat_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for invalid float default, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[defaultInvalidFloatStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[defaultInvalidFloatStruct])
+	})
 }
 
 type defaultInvalidComplexStruct struct {
@@ -201,12 +190,9 @@ type defaultInvalidComplexStruct struct {
 }
 
 func TestDefaultTag_InvalidComplex_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for invalid complex default, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[defaultInvalidComplexStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[defaultInvalidComplexStruct])
+	})
 }
 
 // ============ default tag: TextUnmarshaler ============
@@ -262,19 +248,16 @@ func TestDefaultTag_MapstructureUnmarshaler(t *testing.T) {
 	assert.Equal(t, "mapstruct:world", captured.request.Value.Value)
 }
 
-// ============ default tag: unknown type panic ============
+// ============ default tag: unknown type panics ============
 
 type defaultUnknownTypeStruct struct {
 	Value struct{ Name string } `default:"anything"`
 }
 
 func TestDefaultTag_UnknownType_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for unknown default type, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[defaultUnknownTypeStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[defaultUnknownTypeStruct])
+	})
 }
 
 // ============ default tag: complex numbers ============
@@ -288,7 +271,7 @@ func TestDefaultTag_ComplexNumbers(t *testing.T) {
 	captured, rec := doRequest[defaultComplexStruct](t, captureHandler[defaultComplexStruct], http.MethodGet, "/")
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, complex64(1+2i), captured.request.C64, "C64")
-	assert.Equal(t, complex128(3+4i), captured.request.C128, "C128")
+	assert.Equal(t, 3+4i, captured.request.C128, "C128")
 }
 
 // ============ default tag: no aliasing between requests ============
@@ -296,7 +279,7 @@ func TestDefaultTag_ComplexNumbers(t *testing.T) {
 type sliceDefaultType []string
 
 func (s *sliceDefaultType) UnmarshalText(text []byte) error {
-	*s = sliceDefaultType(strings.Split(string(text), ","))
+	*s = strings.Split(string(text), ",")
 	return nil
 }
 
@@ -331,12 +314,12 @@ func TestDefaultTag_NoAliasing_BetweenRequests(t *testing.T) {
 // ============ header tag tests ============
 
 type headerSingleStruct struct {
-	UserID string `header:"X-User-ID"`
+	UserID string `header:"X-User-Id"`
 }
 
 func TestHeaderTag_SingleField(t *testing.T) {
 	captured, rec := doRequest[headerSingleStruct](t, captureHandler[headerSingleStruct],
-		http.MethodGet, "/", withHeader("X-User-ID", "user123"))
+		http.MethodGet, "/", withHeader("X-User-Id", "user123"))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "user123", captured.request.UserID, "UserID")
 }
@@ -389,12 +372,9 @@ type headerAllWrongTypeStruct struct {
 }
 
 func TestHeaderTag_EmptyTag_WrongType_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for empty header tag with wrong type, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[headerAllWrongTypeStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[headerAllWrongTypeStruct])
+	})
 }
 
 type headerMultipleEmptyStruct struct {
@@ -403,12 +383,9 @@ type headerMultipleEmptyStruct struct {
 }
 
 func TestHeaderTag_EmptyTag_MultipleTags_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for multiple empty header tags, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[headerMultipleEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[headerMultipleEmptyStruct])
+	})
 }
 
 type headerNonEmptyAfterEmptyStruct struct {
@@ -417,12 +394,9 @@ type headerNonEmptyAfterEmptyStruct struct {
 }
 
 func TestHeaderTag_NonEmptyAfterEmpty_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for non-empty header tag after empty header tag, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[headerNonEmptyAfterEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[headerNonEmptyAfterEmptyStruct])
+	})
 }
 
 type headerMultiValueStruct struct {
@@ -484,12 +458,9 @@ type cookieAllWrongTypeStruct struct {
 }
 
 func TestCookieTag_EmptyTag_WrongType_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for empty cookie tag with wrong type, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[cookieAllWrongTypeStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[cookieAllWrongTypeStruct])
+	})
 }
 
 type cookieMultipleEmptyStruct struct {
@@ -498,12 +469,9 @@ type cookieMultipleEmptyStruct struct {
 }
 
 func TestCookieTag_MultipleEmptyTags_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for multiple empty cookie tags, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[cookieMultipleEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[cookieMultipleEmptyStruct])
+	})
 }
 
 type cookieNonEmptyAfterEmptyStruct struct {
@@ -512,12 +480,9 @@ type cookieNonEmptyAfterEmptyStruct struct {
 }
 
 func TestCookieTag_NonEmptyAfterEmpty_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for non-empty cookie tag after empty cookie tag, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[cookieNonEmptyAfterEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[cookieNonEmptyAfterEmptyStruct])
+	})
 }
 
 func TestCookieTag_MultipleCookiesSameName_BindsAllValues(t *testing.T) {
@@ -611,12 +576,9 @@ type queryAllWrongTypeStruct struct {
 }
 
 func TestQueryTag_EmptyTag_WrongType_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for empty query tag with wrong type, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[queryAllWrongTypeStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[queryAllWrongTypeStruct])
+	})
 }
 
 type queryMultipleEmptyStruct struct {
@@ -625,12 +587,9 @@ type queryMultipleEmptyStruct struct {
 }
 
 func TestQueryTag_MultipleEmptyTags_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for multiple empty query tags, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[queryMultipleEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[queryMultipleEmptyStruct])
+	})
 }
 
 type queryNonEmptyAfterEmptyStruct struct {
@@ -639,12 +598,9 @@ type queryNonEmptyAfterEmptyStruct struct {
 }
 
 func TestQueryTag_NonEmptyAfterEmpty_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for non-empty query tag after empty query tag, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[queryNonEmptyAfterEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[queryNonEmptyAfterEmptyStruct])
+	})
 }
 
 type queryIntSliceStruct struct {
@@ -656,6 +612,28 @@ func TestQueryTag_IntSlice_MultipleValues(t *testing.T) {
 		http.MethodGet, "/", withQuery("id=1&id=2&id=3"))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, []int{1, 2, 3}, captured.request.IDs, "IDs")
+}
+
+// --- single-value slices (unbox hook path) ---
+
+func TestQueryTag_SingleValue_StringSlice(t *testing.T) {
+	type Req struct {
+		Tags []string `query:"tag"`
+	}
+	captured, rec := doRequest[Req](t, captureHandler[Req], http.MethodGet, "/",
+		withQuery("tag=go"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, []string{"go"}, captured.request.Tags, "Tags")
+}
+
+func TestQueryTag_SingleValue_IntSlice(t *testing.T) {
+	type Req struct {
+		IDs []int `query:"id"`
+	}
+	captured, rec := doRequest[Req](t, captureHandler[Req], http.MethodGet, "/",
+		withQuery("id=42"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, []int{42}, captured.request.IDs, "IDs")
 }
 
 func TestQueryTag_SpecialCharacters_URLDecoded(t *testing.T) {
@@ -726,12 +704,9 @@ type urlAllWrongTypeStruct struct {
 }
 
 func TestUrlTag_EmptyTag_WrongType_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for empty url tag with wrong type, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[urlAllWrongTypeStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[urlAllWrongTypeStruct])
+	})
 }
 
 type urlMultipleEmptyStruct struct {
@@ -740,12 +715,9 @@ type urlMultipleEmptyStruct struct {
 }
 
 func TestUrlTag_MultipleEmptyTags_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for multiple empty url tags, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[urlMultipleEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[urlMultipleEmptyStruct])
+	})
 }
 
 type urlNonEmptyAfterEmptyStruct struct {
@@ -754,12 +726,9 @@ type urlNonEmptyAfterEmptyStruct struct {
 }
 
 func TestUrlTag_NonEmptyAfterEmpty_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for non-empty url tag after empty url tag, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[urlNonEmptyAfterEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[urlNonEmptyAfterEmptyStruct])
+	})
 }
 
 func TestUrlTag_NoRouteContext_ZeroValue(t *testing.T) {

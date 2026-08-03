@@ -7,9 +7,7 @@
 package httpserver
 
 import (
-	"encoding"
 	"encoding/json"
-	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -17,15 +15,14 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
-	"github.com/go-viper/mapstructure/v2"
 	"github.com/rs/zerolog"
+	"github.com/thanhminhmr/go-common/common"
 	"github.com/thanhminhmr/go-exception"
 )
 
@@ -97,12 +94,6 @@ func RequestParser[Request any](handler RequestHandler[Request]) http.HandlerFun
 	tags := createTags(reflect.TypeFor[Request]())
 	return func(writer http.ResponseWriter, request *http.Request) {
 		var parsed Request
-		parsedValue := reflect.ValueOf(&parsed).Elem()
-		for _, field := range tags.defaultFields {
-			if err := internalDecodeString(field.value, parsedValue.FieldByIndex(field.index)); err != nil {
-				panic(fmt.Errorf("BUG: Cannot unmarshal default value: %w", err))
-			}
-		}
 		requestHandler(writer, request, &tags, &parsed, func(ctx Context) *Response {
 			return handler(ctx, parsed)
 		})
@@ -116,6 +107,12 @@ func requestHandler(
 	parsed any, handler func(ctx Context) *Response,
 ) {
 	logger := zerolog.Ctx(request.Context())
+	// apply default value for request
+	if err := common.ApplyDefaults(parsed); err != nil {
+		logger.Error().Err(err).Msg("Failed to apply request defaults")
+		writer.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	// parse request
 	if status, err := tags.parse(request, reflect.ValueOf(parsed).Elem()); err != nil {
 		logger.Error().Err(err).Msg("Failed to parse request")
@@ -147,7 +144,6 @@ func requestHandler(
 
 type requestTags struct {
 	flags               uint
-	defaultFields       []defaultField
 	headerFieldIndex    []int
 	cookieFieldIndex    []int
 	queryFieldIndex     []int
@@ -157,11 +153,6 @@ type requestTags struct {
 	multipartFieldIndex []int
 	bodyFieldIndex      []int
 	bodyContentTypes    []string
-}
-
-type defaultField = struct {
-	index []int
-	value string
 }
 
 const (
@@ -196,9 +187,12 @@ func createTags(requestType reflect.Type) requestTags {
 	if exists {
 		return tags
 	}
+	// check if defaults are valid
+	if err := common.ApplyDefaults(reflect.New(requestType).Interface()); err != nil {
+		panic(err)
+	}
 	// check the tags recursively
-	defaultValue := reflect.New(requestType).Elem()
-	tags.checkRecursively(requestType, defaultValue, nil)
+	tags.checkRecursively(requestType, nil)
 	if len(tags.bodyContentTypes) > 0 {
 		if tags.flags&tagForm != 0 && slices.Contains(tags.bodyContentTypes, contentTypeIsForm) {
 			panic("BUG: `form` tag field is not allowed when `body` tag contains " + contentTypeIsForm)
@@ -218,7 +212,7 @@ var typeForKeyValue = reflect.TypeFor[KeyValue]()
 var typeForMultipartReader = reflect.TypeFor[*multipart.Reader]()
 var typeForReadCloser = reflect.TypeFor[io.ReadCloser]()
 
-func (tags *requestTags) checkRecursively(requestType reflect.Type, requestValue reflect.Value, fieldIndex []int) {
+func (tags *requestTags) checkRecursively(requestType reflect.Type, fieldIndex []int) {
 	for index := range requestType.NumField() {
 		field := requestType.Field(index)
 		// skip if field is not exported
@@ -230,20 +224,8 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type, requestValue
 			if field.Type.Kind() != reflect.Struct {
 				panic("BUG: anonymous field must be a struct")
 			}
-			tags.checkRecursively(field.Type, requestValue, append(fieldIndex, field.Index...))
+			tags.checkRecursively(field.Type, append(fieldIndex, field.Index...))
 			continue
-		}
-		// process default tag
-		if value, exists := field.Tag.Lookup("default"); exists {
-			// validate the default value can be decoded
-			if err := internalDecodeString(value, requestValue.FieldByIndex(append(fieldIndex, field.Index...))); err != nil {
-				panic(fmt.Errorf("BUG: Cannot unmarshal default value: %w", err))
-			}
-			// store field index and raw default string for per-request re-parsing
-			tags.defaultFields = append(tags.defaultFields, defaultField{
-				index: append(append([]int(nil), fieldIndex...), field.Index...),
-				value: value,
-			})
 		}
 		// process header tag
 		if value, exists := field.Tag.Lookup("header"); exists {
@@ -273,7 +255,7 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type, requestValue
 					panic("BUG: multiple `cookie` tag fields are not allowed when empty `cookie` tag is present")
 				}
 				if field.Type != typeForKeyValues {
-					panic("BUG: empty `cookie` tag field must be a `http.KeyValues`")
+					panic("BUG: empty `cookie` tag field must be a `httpserver.KeyValues`")
 				}
 				tags.cookieFieldIndex = append(append([]int(nil), fieldIndex...), field.Index...)
 			}
@@ -290,7 +272,7 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type, requestValue
 					panic("BUG: multiple `query` tag fields are not allowed when empty `query` tag is present")
 				}
 				if field.Type != typeForKeyValues {
-					panic("BUG: empty `query` tag field must be a `http.KeyValues`")
+					panic("BUG: empty `query` tag field must be a `httpserver.KeyValues`")
 				}
 				tags.queryFieldIndex = append(append([]int(nil), fieldIndex...), field.Index...)
 			}
@@ -307,7 +289,7 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type, requestValue
 					panic("BUG: multiple `url` tag fields are not allowed when empty `url` tag is present")
 				}
 				if field.Type != typeForKeyValue {
-					panic("BUG: empty `url` tag field must be a `http.KeyValue`")
+					panic("BUG: empty `url` tag field must be a `httpserver.KeyValue`")
 				}
 				tags.urlFieldIndex = append(append([]int(nil), fieldIndex...), field.Index...)
 			}
@@ -324,7 +306,7 @@ func (tags *requestTags) checkRecursively(requestType reflect.Type, requestValue
 					panic("BUG: multiple `form` tag fields are not allowed when empty `form` tag is present")
 				}
 				if field.Type != typeForKeyValues {
-					panic("BUG: empty `form` tag field must be a `http.KeyValues`")
+					panic("BUG: empty `form` tag field must be a `httpserver.KeyValues`")
 				}
 				tags.formFieldIndex = append(append([]int(nil), fieldIndex...), field.Index...)
 			}
@@ -492,7 +474,7 @@ func (tags *requestTags) bindHeader(request *http.Request, parsed reflect.Value)
 	if len(request.Header) > 0 {
 		if tags.headerFieldIndex != nil {
 			parsed.FieldByIndex(tags.headerFieldIndex).Set(reflect.ValueOf(request.Header))
-		} else if err := bind("header", request.Header, parsed); err != nil {
+		} else if err := common.BindStructWithTag("header", request.Header, parsed.Addr().Interface()); err != nil {
 			return http.StatusBadRequest, exception.String("HttpServer: Bind request header failed").AddCause(err)
 		}
 	}
@@ -510,7 +492,7 @@ func (tags *requestTags) bindCookie(request *http.Request, parsed reflect.Value)
 		// parse and bind cookies
 		if tags.cookieFieldIndex != nil {
 			parsed.FieldByIndex(tags.cookieFieldIndex).Set(reflect.ValueOf(keyValues))
-		} else if err := bind("cookie", keyValues, parsed); err != nil {
+		} else if err := common.BindStructWithTag("cookie", keyValues, parsed.Addr().Interface()); err != nil {
 			return http.StatusBadRequest, exception.String("HttpServer: Bind cookies failed").AddCause(err)
 		}
 	}
@@ -522,7 +504,7 @@ func (tags *requestTags) bindQuery(request *http.Request, parsed reflect.Value) 
 	if values := request.URL.Query(); len(values) > 0 {
 		if tags.queryFieldIndex != nil {
 			parsed.FieldByIndex(tags.queryFieldIndex).Set(reflect.ValueOf(values))
-		} else if err := bind("query", KeyValues(values), parsed); err != nil {
+		} else if err := common.BindStructWithTag("query", values, parsed.Addr().Interface()); err != nil {
 			return http.StatusBadRequest, exception.String("HttpServer: Bind query values failed").AddCause(err)
 		}
 	}
@@ -542,7 +524,7 @@ func (tags *requestTags) bindUrl(request *http.Request, parsed reflect.Value) (i
 			// parse and bind url parameters
 			if tags.urlFieldIndex != nil {
 				parsed.FieldByIndex(tags.urlFieldIndex).Set(reflect.ValueOf(keyValue))
-			} else if err := bind("url", keyValue, parsed); err != nil {
+			} else if err := common.BindStructWithTag("url", keyValue, parsed.Addr().Interface()); err != nil {
 				return http.StatusBadRequest, exception.String("HttpServer: Bind url params failed").AddCause(err)
 			}
 		}
@@ -564,7 +546,7 @@ func (tags *requestTags) bindForm(reader io.Reader, parsed reflect.Value) (int, 
 	// bind form body
 	if tags.formFieldIndex != nil {
 		parsed.FieldByIndex(tags.formFieldIndex).Set(reflect.ValueOf(values))
-	} else if err := bind("form", values, parsed); err != nil {
+	} else if err := common.BindStructWithTag("form", values, parsed.Addr().Interface()); err != nil {
 		return http.StatusBadRequest, exception.String("HttpServer: Bind form params failed").AddCause(err)
 	}
 	return 0, nil
@@ -587,7 +569,7 @@ func (tags *requestTags) bindJson(reader io.Reader, parsed reflect.Value) (int, 
 	}
 	// bind json body
 	if tags.jsonFieldIndex == nil {
-		if err := bind("json", values, parsed); err != nil {
+		if err := common.BindStructWithTag("json", values, parsed.Addr().Interface()); err != nil {
 			return http.StatusBadRequest, exception.String("HttpServer: Bind json values failed").AddCause(err)
 		}
 	}
@@ -600,7 +582,8 @@ func (tags *requestTags) bindMultipart(
 	// get multipart boundary
 	boundary, ok := parameters["boundary"]
 	if !ok {
-		return http.StatusBadRequest, exception.String("HttpServer: Boundary is missing in Content-Type of a multipart/form-data")
+		return http.StatusBadRequest,
+			exception.String("HttpServer: Boundary is missing in Content-Type of a " + contentTypeIsMultipart)
 	}
 	parsed.FieldByIndex(tags.multipartFieldIndex).Set(reflect.ValueOf(multipart.NewReader(request.Body, boundary)))
 	return 0, nil
@@ -610,182 +593,4 @@ func (tags *requestTags) bindBody(request *http.Request, parsed reflect.Value) {
 	parsed.FieldByIndex(tags.bodyFieldIndex).Set(reflect.ValueOf(request.Body))
 }
 
-func bind(tag string, input any, output reflect.Value) error {
-	if decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		DecodeHook:           internalDecodeHookFunc,
-		Squash:               true,
-		Result:               output.Addr().Interface(),
-		TagName:              tag,
-		SquashTagOption:      "\xFF\xFF\xFF\xFF", // sentinel that cannot match any real tag name, disabling squash-by-tag
-		IgnoreUntaggedFields: true,
-	}); err != nil {
-		return exception.String("HttpServer: Create decoder failed").AddCause(err)
-	} else if err := decoder.Decode(input); err != nil {
-		return exception.String("HttpServer: Decode failed").AddCause(err)
-	}
-	return nil
-}
-
 //endregion parseRequest
-
-// region mapstructure
-
-var typeForString = reflect.TypeFor[string]()
-var typeForInt8 = reflect.TypeFor[int8]()
-var typeForUint8 = reflect.TypeFor[uint8]()
-var typeForInt16 = reflect.TypeFor[int16]()
-var typeForUint16 = reflect.TypeFor[uint16]()
-var typeForInt32 = reflect.TypeFor[int32]()
-var typeForUint32 = reflect.TypeFor[uint32]()
-var typeForInt64 = reflect.TypeFor[int64]()
-var typeForUint64 = reflect.TypeFor[uint64]()
-var typeForInt = reflect.TypeFor[int]()
-var typeForUint = reflect.TypeFor[uint]()
-var typeForFloat32 = reflect.TypeFor[float32]()
-var typeForFloat64 = reflect.TypeFor[float64]()
-var typeForBool = reflect.TypeFor[bool]()
-var typeForComplex64 = reflect.TypeFor[complex64]()
-var typeForComplex128 = reflect.TypeFor[complex128]()
-var typeForJsonNumber = reflect.TypeFor[json.Number]()
-
-func internalDecodeHookFunc(source, target reflect.Value) (any, error) {
-	// same type, no need to change
-	if source.Type() == target.Type() {
-		target.Set(source)
-		return nil, nil
-	}
-	{ // check if source and target is pure slice
-		sourceIsPureSlice := source.Kind() == reflect.Slice && source.NumMethod() == 0 &&
-			(!source.CanAddr() || source.Addr().NumMethod() == 0)
-		targetIsPureSlice := target.Kind() == reflect.Slice && target.NumMethod() == 0 &&
-			(!target.CanAddr() || target.Addr().NumMethod() == 0)
-		// if both are pure slice, short circuit
-		if sourceIsPureSlice && targetIsPureSlice {
-			return source.Interface(), nil
-		}
-		// if source is not a pure slice and target is a pure slice
-		if targetIsPureSlice {
-			// wrap source into a single element slice
-			wrapper := reflect.MakeSlice(reflect.SliceOf(source.Type()), 1, 1)
-			wrapper.Index(0).Set(source)
-			return wrapper.Interface(), nil
-		}
-		// if source is a pure slice with single element, and target is not a pure slice
-		if sourceIsPureSlice && source.Len() == 1 {
-			source = source.Index(0)
-		}
-	}
-	{ // get pointer to target
-		targetOrPointer := target
-		if target.CanAddr() {
-			targetOrPointer = target.Addr()
-		}
-		// check if target implements mapstructure.Unmarshaler
-		if targetUnmarshaller, ok := reflect.TypeAssert[mapstructure.Unmarshaler](targetOrPointer); ok {
-			if err := targetUnmarshaller.UnmarshalMapstructure(source.Interface()); err != nil {
-				return nil, err
-			}
-			return nil, nil
-		}
-	}
-	// check if input is string or json.Number
-	if target.CanAddr() {
-		switch source.Type() {
-		case typeForString, typeForJsonNumber:
-			sourceString, targetType := source.String(), target.Type()
-			switch targetType {
-			case typeForInt, typeForInt8, typeForInt16, typeForInt32, typeForInt64:
-				if parsed, err := strconv.ParseInt(sourceString, 0, targetType.Bits()); err != nil {
-					return nil, err
-				} else {
-					target.SetInt(parsed)
-				}
-			case typeForUint, typeForUint8, typeForUint16, typeForUint32, typeForUint64:
-				if parsed, err := strconv.ParseUint(sourceString, 0, targetType.Bits()); err != nil {
-					return nil, err
-				} else {
-					target.SetUint(parsed)
-				}
-			case typeForFloat32, typeForFloat64:
-				if parsed, err := strconv.ParseFloat(sourceString, targetType.Bits()); err != nil {
-					return nil, err
-				} else {
-					target.SetFloat(parsed)
-				}
-			case typeForBool:
-				if parsed, err := strconv.ParseBool(sourceString); err != nil {
-					return nil, err
-				} else {
-					target.SetBool(parsed)
-				}
-			case typeForComplex64, typeForComplex128:
-				if parsed, err := strconv.ParseComplex(sourceString, targetType.Bits()); err != nil {
-					return nil, err
-				} else {
-					target.SetComplex(parsed)
-				}
-			default:
-				// check if target implements encoding.TextUnmarshaler
-				if targetUnmarshaller, ok := reflect.TypeAssert[encoding.TextUnmarshaler](target.Addr()); ok {
-					if err := targetUnmarshaller.UnmarshalText(unsafeStringToBytes(sourceString)); err != nil {
-						return nil, err
-					}
-					return nil, nil
-				}
-				return source.Interface(), nil
-			}
-			return nil, nil
-		}
-	}
-	return source.Interface(), nil
-}
-
-func internalDecodeString(sourceString string, target reflect.Value) error {
-	switch targetType := target.Type(); targetType {
-	case typeForString:
-		target.SetString(sourceString)
-	case typeForInt, typeForInt8, typeForInt16, typeForInt32, typeForInt64:
-		if parsed, err := strconv.ParseInt(sourceString, 0, targetType.Bits()); err != nil {
-			return err
-		} else {
-			target.SetInt(parsed)
-		}
-	case typeForUint, typeForUint8, typeForUint16, typeForUint32, typeForUint64:
-		if parsed, err := strconv.ParseUint(sourceString, 0, targetType.Bits()); err != nil {
-			return err
-		} else {
-			target.SetUint(parsed)
-		}
-	case typeForFloat32, typeForFloat64:
-		if parsed, err := strconv.ParseFloat(sourceString, targetType.Bits()); err != nil {
-			return err
-		} else {
-			target.SetFloat(parsed)
-		}
-	case typeForBool:
-		if parsed, err := strconv.ParseBool(sourceString); err != nil {
-			return err
-		} else {
-			target.SetBool(parsed)
-		}
-	case typeForComplex64, typeForComplex128:
-		if parsed, err := strconv.ParseComplex(sourceString, targetType.Bits()); err != nil {
-			return err
-		} else {
-			target.SetComplex(parsed)
-		}
-	default:
-		// check if target implements mapstructure.Unmarshaler
-		if targetUnmarshaller, ok := reflect.TypeAssert[mapstructure.Unmarshaler](target.Addr()); ok {
-			return targetUnmarshaller.UnmarshalMapstructure(sourceString)
-		}
-		// check if target implements encoding.TextUnmarshaler
-		if targetUnmarshaller, ok := reflect.TypeAssert[encoding.TextUnmarshaler](target.Addr()); ok {
-			return targetUnmarshaller.UnmarshalText(unsafeStringToBytes(sourceString))
-		}
-		return exception.String("HttpServer: Default value unmarshal with unknown type")
-	}
-	return nil
-}
-
-//endregion mapstructure

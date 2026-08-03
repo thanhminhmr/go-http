@@ -20,6 +20,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Tests for HTTP error paths: invalid content types, body size limits, timeouts,
+// and bind (type coercion) failures.
+
 func TestError_NilResponse_Returns500(t *testing.T) {
 	type Req struct{}
 	handler := RequestParser(func(_ Context, _ Req) *Response {
@@ -166,7 +169,7 @@ func TestError_BindForm_TypeMismatch_400(t *testing.T) {
 	type Req struct {
 		Age int `form:"age"`
 	}
-	// Valid URL-encoded data, but "not-a-number" fails int coercion in bind().
+	// Valid URL-encoded data, but "not-a-number" fails int coercion in common.BindStructWithTag.
 	_, rec := doRequest[Req](t, captureHandler[Req],
 		http.MethodPost, "/", withFormBody(url.Values{"age": {"not-a-number"}}))
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -176,7 +179,7 @@ func TestError_BindForm_ReadError_500(t *testing.T) {
 	type Req struct {
 		Value string `form:"value"`
 	}
-	reqType := reflect.TypeOf(Req{})
+	reqType := reflect.TypeFor[Req]()
 	tags := createTags(reqType)
 
 	var req Req
@@ -191,7 +194,7 @@ func TestError_BindJson_TypeMismatch_400(t *testing.T) {
 	type Req struct {
 		Value int `json:"value"`
 	}
-	// JSON object where "value" is a string, not an int — bind() fails.
+	// JSON object where "value" is a string, not an int — common.BindStructWithTag fails.
 	_, rec := doRequest[Req](t, captureHandler[Req],
 		http.MethodPost, "/", withRawBody("application/json",
 			[]byte(`{"value":"not-a-number"}`)))
@@ -202,7 +205,7 @@ func TestError_BindJson_ReadError_400(t *testing.T) {
 	type Req struct {
 		Value string `json:"value"`
 	}
-	reqType := reflect.TypeOf(Req{})
+	reqType := reflect.TypeFor[Req]()
 	tags := createTags(reqType)
 
 	var req Req
@@ -217,6 +220,6 @@ func TestError_BindJson_ReadError_400(t *testing.T) {
 
 type errorReader struct{}
 
-func (errorReader) Read(p []byte) (int, error) {
+func (errorReader) Read([]byte) (int, error) {
 	return 0, io.ErrUnexpectedEOF
 }

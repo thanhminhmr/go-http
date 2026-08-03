@@ -20,6 +20,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// This file contains shared test infrastructure (request builders, setters, and
+// capture helpers) used across the parser test files.
+
 // multipartReader is a type alias used by multiple test files.
 type multipartReader = multipart.Reader
 

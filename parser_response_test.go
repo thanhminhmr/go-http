@@ -17,6 +17,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Tests for the Response type: fluent builders, body types, headers, cookies,
+// and error paths.
+
 func TestResponse_FluentBuilder(t *testing.T) {
 	type Req struct{}
 	t.Run("status_and_body", func(t *testing.T) {

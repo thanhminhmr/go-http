@@ -17,6 +17,8 @@ import (
 	"testing"
 )
 
+// Benchmarks for request parsing and response writing across all tag types.
+
 func BenchmarkQuery_Simple(b *testing.B) {
 	type Req struct {
 		Name string `query:"name"`

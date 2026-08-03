@@ -32,7 +32,7 @@ import (
 // In both cases, the goroutine leak is bounded: once the body closes, the
 // blocked read fails and the goroutine exits quickly.
 
-func TestBug_BodyClose_CancelsInFlightRead(t *testing.T) {
+func TestGoroutine_BodyClose_CancelsInFlightRead(t *testing.T) {
 	pr, _ := io.Pipe()
 
 	readDone := make(chan error, 1)
@@ -53,9 +53,9 @@ func TestBug_BodyClose_CancelsInFlightRead(t *testing.T) {
 	}
 }
 
-// TestBug_BindFullTextBody_TimeoutClosesBody exercises the full 5-second
+// TestGoroutine_BindFullTextBody_TimeoutClosesBody exercises the full 5-second
 // timeout path. It is skipped in short mode.
-func TestBug_BindFullTextBody_TimeoutClosesBody(t *testing.T) {
+func TestGoroutine_BindFullTextBody_TimeoutClosesBody(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping 5-second timeout test in short mode")
 	}
@@ -94,10 +94,10 @@ func TestBug_BindFullTextBody_TimeoutClosesBody(t *testing.T) {
 	}
 }
 
-// TestBug_BindFullTextBody_ContextCancel_Returns408 verifies that when the
+// TestGoroutine_BindFullTextBody_ContextCancel_Returns408 verifies that when the
 // request context is cancelled (client disconnect), bindFullTextBody returns
 // 408 quickly without waiting for the 5-second timeout.
-func TestBug_BindFullTextBody_ContextCancel_Returns408(t *testing.T) {
+func TestGoroutine_BindFullTextBody_ContextCancel_Returns408(t *testing.T) {
 	pr, _ := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -146,10 +146,10 @@ func TestBug_BindFullTextBody_ContextCancel_Returns408(t *testing.T) {
 	_ = pr.Close()
 }
 
-// TestBug_BindFullTextBody_ContextCancel_BodyClose_KillsBinder verifies that
+// TestGoroutine_BindFullTextBody_ContextCancel_BodyClose_KillsBinder verifies that
 // after bindFullTextBody returns due to context cancellation, closing the
 // request body causes the binder goroutine to exit promptly.
-func TestBug_BindFullTextBody_ContextCancel_BodyClose_KillsBinder(t *testing.T) {
+func TestGoroutine_BindFullTextBody_ContextCancel_BodyClose_KillsBinder(t *testing.T) {
 	pr, _ := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -196,7 +196,7 @@ func TestBug_BindFullTextBody_ContextCancel_BodyClose_KillsBinder(t *testing.T) 
 
 type panicTextType string
 
-func (p *panicTextType) UnmarshalText(data []byte) error {
+func (p *panicTextType) UnmarshalText([]byte) error {
 	panic("coverage: binder panic")
 }
 

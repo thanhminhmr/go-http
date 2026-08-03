@@ -18,7 +18,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// Tests for the body-reading tags: form, json, multipart, and body.
+// Also covers HTTP method variations (PUT, PATCH, DELETE, HEAD).
 
 // ============ form tag tests ============
 
@@ -93,12 +97,9 @@ type formAllWrongTypeStruct struct {
 }
 
 func TestFormTag_EmptyTag_WrongType_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for empty form tag with wrong type")
-		}
-	}()
-	_ = RequestParser(captureHandler[formAllWrongTypeStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[formAllWrongTypeStruct])
+	})
 }
 
 type formMultipleEmptyStruct struct {
@@ -107,12 +108,9 @@ type formMultipleEmptyStruct struct {
 }
 
 func TestFormTag_MultipleEmptyTags_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for multiple empty form tags, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[formMultipleEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[formMultipleEmptyStruct])
+	})
 }
 
 type formNonEmptyAfterEmptyStruct struct {
@@ -121,12 +119,9 @@ type formNonEmptyAfterEmptyStruct struct {
 }
 
 func TestFormTag_NonEmptyAfterEmpty_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for non-empty form tag after empty form tag, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[formNonEmptyAfterEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[formNonEmptyAfterEmptyStruct])
+	})
 }
 
 type formMultipleValuesStruct struct {
@@ -232,12 +227,9 @@ type jsonMultipleEmptyStruct struct {
 }
 
 func TestJsonTag_EmptyTag_MultipleTags_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for multiple empty json tags")
-		}
-	}()
-	_ = RequestParser(captureHandler[jsonMultipleEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[jsonMultipleEmptyStruct])
+	})
 }
 
 type jsonNonEmptyAfterEmptyStruct struct {
@@ -246,12 +238,9 @@ type jsonNonEmptyAfterEmptyStruct struct {
 }
 
 func TestJsonTag_NonEmptyAfterEmpty_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for non-empty json tag after empty json tag, got none")
-		}
-	}()
-	_ = RequestParser(captureHandler[jsonNonEmptyAfterEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[jsonNonEmptyAfterEmptyStruct])
+	})
 }
 
 // ============ multipart tag tests ============
@@ -299,12 +288,9 @@ type multipartNonEmptyStruct struct {
 }
 
 func TestMultipartTag_NonEmptyValue_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for non-empty multipart tag value")
-		}
-	}()
-	_ = RequestParser(captureHandler[multipartNonEmptyStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[multipartNonEmptyStruct])
+	})
 }
 
 type multipartWrongTypeStruct struct {
@@ -312,12 +298,9 @@ type multipartWrongTypeStruct struct {
 }
 
 func TestMultipartTag_WrongType_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for multipart tag with wrong type")
-		}
-	}()
-	_ = RequestParser(captureHandler[multipartWrongTypeStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[multipartWrongTypeStruct])
+	})
 }
 
 type multipartMultipleStruct struct {
@@ -326,12 +309,9 @@ type multipartMultipleStruct struct {
 }
 
 func TestMultipartTag_MultipleTags_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for multiple multipart tags")
-		}
-	}()
-	_ = RequestParser(captureHandler[multipartMultipleStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[multipartMultipleStruct])
+	})
 }
 
 func TestMultipartTag_FileUpload(t *testing.T) {
@@ -424,48 +404,33 @@ type bodyWrongTypeStruct struct {
 }
 
 func TestBodyTag_ConflictsWithForm_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for body tag conflicting with form tag")
-		}
-	}()
-	_ = RequestParser(captureHandler[bodyConflictFormStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[bodyConflictFormStruct])
+	})
 }
 
 func TestBodyTag_ConflictsWithJson_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for body tag conflicting with json tag")
-		}
-	}()
-	_ = RequestParser(captureHandler[bodyConflictJsonStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[bodyConflictJsonStruct])
+	})
 }
 
 func TestBodyTag_ConflictsWithMultipart_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for body tag conflicting with multipart tag")
-		}
-	}()
-	_ = RequestParser(captureHandler[bodyConflictMultipartStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[bodyConflictMultipartStruct])
+	})
 }
 
 func TestBodyTag_MultipleTags_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for multiple body tags")
-		}
-	}()
-	_ = RequestParser(captureHandler[bodyMultipleStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[bodyMultipleStruct])
+	})
 }
 
 func TestBodyTag_WrongType_Panics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for body tag with wrong type")
-		}
-	}()
-	_ = RequestParser(captureHandler[bodyWrongTypeStruct])
+	require.Panics(t, func() {
+		_ = RequestParser(captureHandler[bodyWrongTypeStruct])
+	})
 }
 
 // Test that body tag is used as fallback when no other body tags match

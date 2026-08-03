@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Tests for the validate tag using go-playground/validator.
+
 func TestValidation_Required_Header(t *testing.T) {
 	type Req struct {
 		Name string `header:"X-Name" validate:"required"`

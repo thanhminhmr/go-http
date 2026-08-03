@@ -17,12 +17,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// ============ Regression tests: embedded struct field indices ============
+// ============ Embedded struct field tests ============
 //
-// These tests verify that embedded structs with tags that store field indices
-// work correctly. The original bug was in parser.go's checkRecursively, which
-// recursed into embedded struct fields but used incorrect field index paths.
-// All bugs are FIXED. These tests ensure they stay fixed.
+// These tests verify that embedded structs with tags work correctly, including:
+//   - Empty tags (header:"", query:"", etc.) on embedded fields that store field
+//     indices for direct binding.
+//   - Non-empty tags on embedded fields, which go through common.BindStructWithTag
+//     (mapstructure with Squash:true).
+//   - Nested anonymous structs (multiple levels of embedding).
+//   - Unexported fields are skipped.
 //
 // Tests that would panic use defer recover as a safety net because Go 1.26's
 // testing framework repanics after catching a test panic, crashing the binary
@@ -38,7 +41,7 @@ func tagPanicGuard(t *testing.T) {
 
 // ------------ default tag on embedded field ------------
 
-func TestBug_Embedded_DefaultTag(t *testing.T) {
+func TestEmbed_DefaultTag(t *testing.T) {
 	defer tagPanicGuard(t)
 
 	type Base struct {
@@ -60,7 +63,7 @@ func TestBug_Embedded_DefaultTag(t *testing.T) {
 
 // ------------ empty header tag on embedded field ------------
 
-func TestBug_Embedded_EmptyHeaderTag(t *testing.T) {
+func TestEmbed_EmptyHeaderTag(t *testing.T) {
 	defer tagPanicGuard(t)
 
 	type Base struct {
@@ -77,7 +80,7 @@ func TestBug_Embedded_EmptyHeaderTag(t *testing.T) {
 
 // ------------ empty cookie tag on embedded field ------------
 
-func TestBug_Embedded_EmptyCookieTag(t *testing.T) {
+func TestEmbed_EmptyCookieTag(t *testing.T) {
 	defer tagPanicGuard(t)
 
 	type Base struct {
@@ -94,7 +97,7 @@ func TestBug_Embedded_EmptyCookieTag(t *testing.T) {
 
 // ------------ empty query tag on embedded field ------------
 
-func TestBug_Embedded_EmptyQueryTag(t *testing.T) {
+func TestEmbed_EmptyQueryTag(t *testing.T) {
 	defer tagPanicGuard(t)
 
 	type Base struct {
@@ -111,7 +114,7 @@ func TestBug_Embedded_EmptyQueryTag(t *testing.T) {
 
 // ------------ empty url tag on embedded field ------------
 
-func TestBug_Embedded_EmptyUrlTag(t *testing.T) {
+func TestEmbed_EmptyUrlTag(t *testing.T) {
 	defer tagPanicGuard(t)
 
 	type Base struct {
@@ -132,7 +135,7 @@ func TestBug_Embedded_EmptyUrlTag(t *testing.T) {
 // goroutine with a recover. We call createTags + bindForm directly here to
 // test in the main goroutine for simplicity.
 
-func TestBug_Embedded_EmptyFormTag(t *testing.T) {
+func TestEmbed_EmptyFormTag(t *testing.T) {
 	defer tagPanicGuard(t)
 
 	type Base struct {
@@ -155,7 +158,7 @@ func TestBug_Embedded_EmptyFormTag(t *testing.T) {
 
 // ------------ empty json tag on embedded field ------------
 
-func TestBug_Embedded_EmptyJsonTag(t *testing.T) {
+func TestEmbed_EmptyJsonTag(t *testing.T) {
 	type Base struct {
 		Data map[string]any `json:""`
 	}
@@ -170,7 +173,7 @@ func TestBug_Embedded_EmptyJsonTag(t *testing.T) {
 
 // ------------ multipart tag on embedded field ------------
 
-func TestBug_Embedded_MultipartTag(t *testing.T) {
+func TestEmbed_MultipartTag(t *testing.T) {
 	defer tagPanicGuard(t)
 
 	type Base struct {
@@ -189,7 +192,7 @@ func TestBug_Embedded_MultipartTag(t *testing.T) {
 
 // ------------ body tag on embedded field ------------
 
-func TestBug_Embedded_BodyTag(t *testing.T) {
+func TestEmbed_BodyTag(t *testing.T) {
 	defer tagPanicGuard(t)
 
 	type Base struct {
@@ -221,10 +224,10 @@ func TestEmbed_UnexportedField_Skipped(t *testing.T) {
 // ------------ contrast: non-empty tags on embedded field work ------------
 //
 // Non-empty tags (header:"X", query:"q", etc.) don't store field indices.
-// They set the tags.flags bit and binding goes through bind() →
-// mapstructure with Squash:true, which handles embedding correctly.
+// They set the tags.flags bit and binding goes through common.BindStructWithTag
+// (mapstructure with Squash:true), which handles embedding correctly.
 
-func TestBug_Embedded_NonEmptyTag_Works(t *testing.T) {
+func TestEmbed_NonEmptyTag_Works(t *testing.T) {
 	type Inner struct {
 		Name string `query:"name"`
 	}
@@ -241,7 +244,7 @@ func TestBug_Embedded_NonEmptyTag_Works(t *testing.T) {
 
 // ------------ nested anonymous structs (3 levels) ------------
 
-func TestEmbedding_NestedAnonymous(t *testing.T) {
+func TestEmbed_NestedAnonymous(t *testing.T) {
 	type Inner struct {
 		Val string `query:"val"`
 	}

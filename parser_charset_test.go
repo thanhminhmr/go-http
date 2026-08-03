@@ -15,6 +15,9 @@ import (
 	"golang.org/x/text/transform"
 )
 
+// Tests for charset detection and conversion in body parsing: BOM sniffing,
+// charset parameter, UTF-16, ISO-8859-1, Windows-1252.
+
 func TestCharset_UTF8_BOM(t *testing.T) {
 	type Req struct {
 		Data string `json:"data"`
