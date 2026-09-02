@@ -14,11 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Tests for tag priority. When multiple tags are on the same field, the
-// higher-priority tag's value wins.
-// Priority (lowest → highest): default, header, cookie, query, url, form, json,
-// multipart, body.
-
 // ============ tag priority ============
 
 // Tag priority (lowest → highest): default, header, cookie, query, url, form, json, multipart, body.

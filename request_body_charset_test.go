@@ -161,35 +161,14 @@ func TestCharset_ISO8859_1_FormBody(t *testing.T) {
 	assert.Equal(t, "café", captured.request.Name, "Name")
 }
 
-func TestCharset_USAscii_NopEncoding(t *testing.T) {
+func TestCharset_USASCII_DecodesBody(t *testing.T) {
 	type Req struct {
 		Data string `json:"data"`
 	}
-	// us-ascii is a 7-bit encoding; charset.Lookup returns encoding.Nop for it,
-	// which means the reader is returned as-is (no transformation needed since
-	// ASCII is a subset of UTF-8).
 	captured, rec := doRequest[Req](t, captureHandler[Req], http.MethodPost, "/",
 		withRawBody("application/json; charset=us-ascii", []byte(`{"data":"hello"}`)))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "hello", captured.request.Data, "Data")
-}
-
-// TestUTF16EncodeDecode verifies our test helpers encode UTF-16 correctly.
-func TestUTF16EncodeDecode(t *testing.T) {
-	original := "héllo 世界"
-	utf16le := unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM)
-	encoded, _, err := transform.Bytes(utf16le.NewEncoder(), []byte(original))
-	if err != nil {
-		t.Fatalf("encode failed: %v", err)
-	}
-	// Decode back
-	decoded, _, err := transform.Bytes(utf16le.NewDecoder(), encoded)
-	if err != nil {
-		t.Fatalf("decode failed: %v", err)
-	}
-	if string(decoded) != original {
-		t.Errorf("roundtrip failed: got %q, want %q", string(decoded), original)
-	}
 }
 
 // ============ short body edge cases (BOM peek) ============

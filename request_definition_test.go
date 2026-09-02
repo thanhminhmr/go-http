@@ -24,19 +24,13 @@ type AnonInt int
 
 func TestPanic_NonStructRequestType(t *testing.T) {
 	require.Panics(t, func() {
-		_ = RequestParser(func(ctx Context, _ int) *Response {
-			return ctx.Response(http.StatusOK)
-		})
+		_ = RequestParser(func(ctx *Context, _ int) { ctx.NewResponse(http.StatusOK) })
 	})
 }
 
 // ============ checkRecursively: anonymous non-struct field ============
 
 func TestPanic_AnonymousNonStructField(t *testing.T) {
-	type Req struct {
-		AnonInt
-	}
-	require.Panics(t, func() {
-		_ = RequestParser(captureHandler[Req])
-	})
+	type Req struct{ AnonInt }
+	require.Panics(t, func() { _ = RequestParser(captureHandler[Req]) })
 }

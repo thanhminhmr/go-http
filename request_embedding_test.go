@@ -26,11 +26,6 @@ import (
 //     (mapstructure with Squash:true).
 //   - Nested anonymous structs (multiple levels of embedding).
 //   - Unexported fields are skipped.
-//
-// Tests that would panic use defer recover as a safety net because Go 1.26's
-// testing framework repanics after catching a test panic, crashing the binary
-// and preventing other tests from running. The recover calls t.Fatalf so the
-// test still FAILs when the bug is present — it just does so cleanly.
 
 func tagPanicGuard(t *testing.T) {
 	t.Helper()
@@ -123,7 +118,7 @@ func TestEmbed_EmptyUrlTag(t *testing.T) {
 	type Req struct {
 		Base
 	}
-	captured, rec := doChiRequest[Req](t, http.MethodGet, "/{id}", "/123",
+	captured, rec := doServeMuxRequest[Req](t, http.MethodGet, "/{id}", "/123",
 		captureHandler[Req])
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, KeyValue{"id": "123"}, captured.request.Params)

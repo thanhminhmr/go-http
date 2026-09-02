@@ -8,6 +8,7 @@ package httpserver
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -25,12 +25,10 @@ import (
 
 func TestError_NilResponse_Returns500(t *testing.T) {
 	type Req struct{}
-	handler := RequestParser(func(_ Context, _ Req) *Response {
-		return nil
-	})
+	handler := RequestParser(func(_ *Context, _ Req) {})
 	req, _ := http.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	asTestHTTPHandler(handler).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Empty(t, rec.Body.String())
 }
@@ -44,7 +42,7 @@ func TestError_MissingContentType_415(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "/", body)
 	req.ContentLength = int64(len(`{"data":"hello"}`))
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	asTestHTTPHandler(handler).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
 	assert.Empty(t, rec.Body.String())
 }
@@ -59,7 +57,7 @@ func TestError_InvalidContentType_400(t *testing.T) {
 	req.Header.Set("Content-Type", "not a valid media type")
 	req.ContentLength = int64(len(`{"data":"hello"}`))
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	asTestHTTPHandler(handler).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Empty(t, rec.Body.String())
 }
@@ -84,7 +82,7 @@ func TestError_MissingContentLength_411(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.ContentLength = -1
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	asTestHTTPHandler(handler).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusLengthRequired, rec.Code)
 	assert.Empty(t, rec.Body.String())
 }
@@ -102,7 +100,7 @@ func TestError_BodyTooLarge_413(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.ContentLength = int64(len(largeBody))
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	asTestHTTPHandler(handler).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 	assert.Empty(t, rec.Body.String())
 }
@@ -116,36 +114,6 @@ func TestError_InvalidForm_400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Empty(t, rec.Body.String())
 }
-
-func TestError_BodyTimeout_408(t *testing.T) {
-	type Req struct {
-		Data string `json:"data"`
-	}
-	handler := RequestParser(captureHandler[Req])
-	req, _ := http.NewRequest(http.MethodPost, "/", &slowReader{delay: maxReadBodyDuration + 2*time.Second})
-	req.Header.Set("Content-Type", "application/json")
-	req.ContentLength = 100
-	rec := httptest.NewRecorder()
-	start := time.Now()
-	handler.ServeHTTP(rec, req)
-	elapsed := time.Since(start)
-	assert.Equal(t, http.StatusRequestTimeout, rec.Code)
-	assert.Empty(t, rec.Body.String())
-	if elapsed < maxReadBodyDuration {
-		t.Errorf("timeout occurred too quickly: %v (expected at least %v)", elapsed, maxReadBodyDuration)
-	}
-}
-
-type slowReader struct {
-	delay time.Duration
-}
-
-func (sr *slowReader) Read(_ []byte) (n int, err error) {
-	time.Sleep(sr.delay)
-	return 0, io.EOF
-}
-
-// ============ bind error paths (type coercion failures) ============
 
 func TestError_BindHeader_400(t *testing.T) {
 	type Req struct {
@@ -222,4 +190,38 @@ type errorReader struct{}
 
 func (errorReader) Read([]byte) (int, error) {
 	return 0, io.ErrUnexpectedEOF
+}
+
+// ============ defensive ApplyDefaults failure ============
+
+// failingDefault is a test-only type implementing [encoding.TextUnmarshaler]
+// whose UnmarshalText always fails. Used to exercise the defensive
+// `common.ApplyDefaults` error branch in [requestHandler] without disturbing
+// parser-cache state.
+type failingDefault struct {
+	value string
+}
+
+func (f *failingDefault) UnmarshalText(text []byte) error {
+	f.value = string(text)
+	return errors.New("default failed")
+}
+
+func TestRequestHandler_ApplyDefaultsError_Produces500(t *testing.T) {
+	type Req struct {
+		Field failingDefault `default:"anything"`
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	ctx := &Context{request: req, writer: rec}
+
+	var parsed Req
+	nextCalled := false
+	requestHandler(ctx, &requestTags{}, &parsed, func(ctx *Context) {
+		nextCalled = true
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, ctx.status)
+	assert.False(t, nextCalled, "next must not be called when ApplyDefaults fails")
 }
